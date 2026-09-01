@@ -2,7 +2,7 @@
 
 **NOT SUITABLE FOR PRODUCTION.**
 
-Atum v0.1 is an early development preview. Do not install it on a production Kamailio host or rely on Atum authentication as a production security boundary. Remote development mode is Internet-reachable only when the operator deliberately permits it and remains unsuitable for production.
+Atum v0.1 is an early development preview. Do not install it on a production Kamailio host or rely on Atum authentication as a production security boundary. Remote development mode binds to the configured address, `0.0.0.0:8443` by default, and may already be reachable wherever existing host or cloud firewall policy permits it. Restrict access to a trusted administration IP or CIDR. Remote mode remains unsuitable for production.
 
 ## Supported Versions
 
@@ -95,7 +95,7 @@ Remote mode terminates TLS directly in its dedicated Nginx/Apache vhost, passes 
 
 Discovery fails closed for parameter and define values. A small positive classification permits non-secret scalar tuning values; other values are redacted before information reaches the GUI, AJAX response or CLI output.
 
-Unknown statements are retained only with quoted values removed. This reduces accidental disclosure but is not proof that every custom syntax is safe. Do not use development-preview discovery output as a substitute for normal protection of Kamailio configuration files.
+Unknown statements retain useful type and source provenance without exposing their raw content. This conservative handling does not prove that every custom syntax is semantically understood. Do not use development-preview discovery output as a substitute for normal protection of Kamailio configuration files.
 
 The default audit destination is the same application-writable SQLite database as other Atum state. It has no tamper-evidence, external retention or append-only guarantee. The destination interface permits a future protected forwarder without presenting the current log as a production security record.
 
@@ -131,9 +131,11 @@ Installation/removal follows the lifecycle rules in `docs/INSTALLATION-LIFECYCLE
 Important controls include:
 
 - no install-time Kamailio configuration changes;
-- pre/post installation hashing of recursively discovered Kamailio configuration files;
+- pre/post installation hashing of files in the statically recognisable literal include/import scope;
+- one shared exclusive lock covering install, interrupted-install recovery and uninstall;
 - a root-owned installation ledger;
 - per-install ownership markers on Atum-owned directory trees;
+- an explicit `install-files.txt` allowlist that excludes Git metadata and unrelated checkout content from the installed application;
 - refusal to guess ownership when the ledger or markers are missing or inconsistent;
 - conservative operating-system dependency removal;
 - no firewall rule added by default.

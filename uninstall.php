@@ -23,6 +23,33 @@ foreach ($argv as $arg) {
 }
 
 $ledgerPath = rtrim($configDirOverride, '/') . '/install-ledger.json';
+$lockPath = getenv('ATUM_LIFECYCLE_LOCK_PATH') ?: '/run/atum';
+if (!str_starts_with($lockPath, '/') || $lockPath === '/') {
+    fwrite(STDERR, "Lifecycle lock path is unsafe: {$lockPath}\n");
+    exit(1);
+}
+$lockParent = dirname($lockPath);
+$parentStat = @lstat($lockParent);
+if (!is_array($parentStat) || !is_dir($lockParent) || is_link($lockParent)
+    || (int) ($parentStat['uid'] ?? -1) !== 0 || (((int) ($parentStat['mode'] ?? 0)) & 0022) !== 0) {
+    fwrite(STDERR, "Lifecycle lock parent is not a secure root-controlled directory: {$lockParent}\n");
+    exit(1);
+}
+if (!file_exists($lockPath) && !@mkdir($lockPath, 0700)) {
+    fwrite(STDERR, "Unable to create lifecycle lock directory: {$lockPath}\n");
+    exit(1);
+}
+$lockStat = @stat($lockPath);
+if (!is_array($lockStat) || !is_dir($lockPath) || is_link($lockPath)
+    || (int) ($lockStat['uid'] ?? -1) !== 0 || (((int) ($lockStat['mode'] ?? 0)) & 0077) !== 0) {
+    fwrite(STDERR, "Lifecycle lock path is not a secure root-controlled directory: {$lockPath}\n");
+    exit(1);
+}
+$lifecycleLock = @fopen($lockPath, 'r');
+if ($lifecycleLock === false || !flock($lifecycleLock, LOCK_EX | LOCK_NB)) {
+    fwrite(STDERR, "Another Atum install or uninstall operation is already running.\n");
+    exit(1);
+}
 if (!is_readable($ledgerPath)) {
     fwrite(STDERR, "Atum install ledger not found: {$ledgerPath}\nRefusing to guess what belongs to Atum.\n");
     exit(1);

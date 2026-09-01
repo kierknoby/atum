@@ -172,6 +172,8 @@ The central rule is:
 
 Host artefacts created for Atum must be recorded by the installation lifecycle mechanism so failed installation and later removal use the same ownership record.
 
+The source Git checkout is outside that ownership set. Installation copies only the application files declared by `install-files.txt`; repository metadata, tests and unrelated checkout content are not part of the installed web application and are not removal targets.
+
 ## Current Architectural Limitations
 
 - Discovery is not a complete Kamailio parser.

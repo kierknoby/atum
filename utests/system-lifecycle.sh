@@ -8,6 +8,7 @@ export ATUM_PREFIX="$TEST_ROOT/application"
 export ATUM_STATE_DIR="$TEST_ROOT/state"
 export ATUM_CONFIG_DIR="$TEST_ROOT/configuration"
 export ATUM_TRANSACTION_DIR="$TEST_ROOT/transaction"
+export ATUM_LIFECYCLE_LOCK_PATH="$TEST_ROOT/lifecycle-lock"
 export ATUM_ADMIN_USER=testadmin
 export ATUM_ADMIN_PASSWORD_FILE="$TEST_ROOT/password"
 cleanup() { if [ -f "$ATUM_CONFIG_DIR/install-ledger.json" ]; then php "$ROOT/uninstall.php" --config-dir="$ATUM_CONFIG_DIR" --yes --keep-dependencies >/dev/null 2>&1 || true; fi; rm -rf "$TEST_ROOT"; }
@@ -22,9 +23,41 @@ printf '%s\n' "$ATUM_CONFIG_DIR" > "$ATUM_TRANSACTION_DIR/configuration"
 printf '%s\n' 1 > "$ATUM_TRANSACTION_DIR/intended-state"
 printf '%s\n' "$install_id" > "$ATUM_STATE_DIR/.atum-provisional-install-id"
 printf '%s\n' fake-atum-dependency > "$ATUM_TRANSACTION_DIR/packages-added"
+
+# A live lifecycle lock must prevent a second installer from mistaking the
+# transaction above for an interrupted operation.
+mkdir -m 0700 "$ATUM_LIFECYCLE_LOCK_PATH"
+exec 8< "$ATUM_LIFECYCLE_LOCK_PATH"
+flock -n 8
+if "$ROOT/install" --development --allow-no-kamailio --no-deps --yes > "$TEST_ROOT/concurrent-install.out" 2>&1; then
+    echo 'concurrent installer acquired the lifecycle lock' >&2
+    exit 1
+fi
+grep -q 'Another Atum install or uninstall operation is already running' "$TEST_ROOT/concurrent-install.out"
+[ -f "$ATUM_TRANSACTION_DIR/install-id" ] && [ -f "$ATUM_STATE_DIR/.atum-provisional-install-id" ]
+flock -u 8
+
+# Once the interrupted process has released the lock, normal recovery remains
+# available and the installation can proceed.
 "$ROOT/install" --development --allow-no-kamailio --no-deps --yes
 [ -f "$ATUM_CONFIG_DIR/install-ledger.json" ] && [ ! -d "$ATUM_TRANSACTION_DIR" ]
 grep -q 'fake-atum-dependency' "$ATUM_CONFIG_DIR/install-ledger.json"
+
+if command -v runuser >/dev/null 2>&1; then
+    if runuser -u atum -- sh -c 'exec 7< "$1"' sh "$ATUM_LIFECYCLE_LOCK_PATH" 2>/dev/null; then
+        echo 'unprivileged Atum account opened the lifecycle lock' >&2
+        exit 1
+    fi
+fi
+
+flock -n 8
+if php "$ROOT/uninstall.php" --config-dir="$ATUM_CONFIG_DIR" --check > "$TEST_ROOT/concurrent-uninstall.out" 2>&1; then
+    echo 'uninstaller acquired a live installer lifecycle lock' >&2
+    exit 1
+fi
+grep -q 'Another Atum install or uninstall operation is already running' "$TEST_ROOT/concurrent-uninstall.out"
+flock -u 8
+
 php "$ROOT/uninstall.php" --config-dir="$ATUM_CONFIG_DIR" --check >/dev/null
 committed_id=$(sed -n '1p' "$ATUM_STATE_DIR/.atum-install-id")
 printf '%s\n' ffffffffffffffffffffffffffffffff > "$ATUM_STATE_DIR/.atum-install-id"
@@ -84,4 +117,35 @@ PATH="$TEST_ROOT/bin:$PATH" php "$ROOT/uninstall.php" --config-dir="$ATUM_CONFIG
 [ ! -e "$ATUM_NGINX_CONFIG_DIR/atum.conf" ] && [ ! -e "$ATUM_FPM_POOL_DIR/atum.conf" ]
 [ -f "$TEST_ROOT/host/nginx/operator.conf" ]
 ! grep -Eq '(^| )(ufw|firewall-cmd|iptables|nft)( |$)' "$TEST_ROOT/service-actions"
-echo 'PASS  interrupted/local and remote HTTPS install/uninstall lifecycle'
+
+# Install from a genuine Git work tree containing repository metadata and
+# arbitrary untracked files. The manifest alone defines the installed files.
+CHECKOUT="$TEST_ROOT/github-checkout"
+cp -a "$ROOT" "$CHECKOUT"
+[ "$(git -c safe.directory="$CHECKOUT" -C "$CHECKOUT" rev-parse --is-inside-work-tree)" = true ]
+mkdir "$CHECKOUT/operator-scratch"
+printf '%s\n' 'must remain in checkout only' > "$CHECKOUT/operator-scratch/notes.txt"
+printf '%s\n' '<?php throw new RuntimeException("must never be installed");' > "$CHECKOUT/local-secret.php"
+checkout_status_before=$(git -c safe.directory="$CHECKOUT" -C "$CHECKOUT" status --porcelain=v1 --untracked-files=all)
+checkout_head_before=$(git -c safe.directory="$CHECKOUT" -C "$CHECKOUT" rev-parse HEAD)
+checkout_index_before=$(sha256sum "$CHECKOUT/.git/index" | awk '{print $1}')
+scratch_before=$(sha256sum "$CHECKOUT/operator-scratch/notes.txt" "$CHECKOUT/local-secret.php")
+export ATUM_PREFIX="$TEST_ROOT/checkout-install/application"
+export ATUM_STATE_DIR="$TEST_ROOT/checkout-install/state"
+export ATUM_CONFIG_DIR="$TEST_ROOT/checkout-install/configuration"
+export ATUM_TRANSACTION_DIR="$TEST_ROOT/checkout-install/transaction"
+mkdir -p "$TEST_ROOT/checkout-install"
+"$CHECKOUT/install" --development --allow-no-kamailio --no-deps --yes > "$TEST_ROOT/checkout-install.out"
+(sed '/^[[:space:]]*$/d' "$CHECKOUT/install-files.txt"; printf '%s\n' install-files.txt) | sort -u > "$TEST_ROOT/expected-installed-files"
+find "$ATUM_PREFIX" -type f ! -name '.atum-install-id' ! -name '.atum-provisional-install-id' -printf '%P\n' | sort -u > "$TEST_ROOT/actual-installed-files"
+cmp "$TEST_ROOT/expected-installed-files" "$TEST_ROOT/actual-installed-files"
+[ ! -e "$ATUM_PREFIX/.git" ] && [ ! -e "$ATUM_PREFIX/local-secret.php" ] && [ ! -e "$ATUM_PREFIX/operator-scratch" ]
+[ "$(git -c safe.directory="$CHECKOUT" -C "$CHECKOUT" status --porcelain=v1 --untracked-files=all)" = "$checkout_status_before" ]
+[ "$(git -c safe.directory="$CHECKOUT" -C "$CHECKOUT" rev-parse HEAD)" = "$checkout_head_before" ]
+[ "$(sha256sum "$CHECKOUT/.git/index" | awk '{print $1}')" = "$checkout_index_before" ]
+[ "$(sha256sum "$CHECKOUT/operator-scratch/notes.txt" "$CHECKOUT/local-secret.php")" = "$scratch_before" ]
+/usr/local/sbin/atum-uninstall --config-dir="$ATUM_CONFIG_DIR" --yes --keep-dependencies >/dev/null
+[ ! -e "$ATUM_PREFIX" ] && [ ! -e "$ATUM_STATE_DIR" ] && [ ! -e "$ATUM_CONFIG_DIR" ]
+[ -d "$CHECKOUT/.git" ] && [ -f "$CHECKOUT/operator-scratch/notes.txt" ] && [ -f "$CHECKOUT/local-secret.php" ]
+[ "$(git -c safe.directory="$CHECKOUT" -C "$CHECKOUT" status --porcelain=v1 --untracked-files=all)" = "$checkout_status_before" ]
+echo 'PASS  locking, interrupted recovery, remote and Git-checkout install/uninstall lifecycle'

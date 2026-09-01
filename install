@@ -22,6 +22,7 @@ LISTEN_ADDRESS=0.0.0.0
 LISTEN_PORT=8443
 WEB_SERVER_REQUEST=""
 TRANSACTION_DIR="${ATUM_TRANSACTION_DIR:-/var/lib/atum-install-transaction}"
+LIFECYCLE_LOCK_PATH="${ATUM_LIFECYCLE_LOCK_PATH:-/run/atum}"
 RECOVERED_PACKAGES=""
 
 usage() {
@@ -30,6 +31,12 @@ Atum GUI installer
 
 Usage: ./install [options]
 
+Run from a checkout created with:
+  git clone https://github.com/kierknoby/atum.git
+
+The checkout is a read-only installation source. install-files.txt is the
+authoritative installed application file set.
+
   --check                     pre-flight only; make no changes
   --no-deps                   do not install missing OS packages
   --yes, -y                   answer yes to dependency prompts
@@ -37,10 +44,10 @@ Usage: ./install [options]
   --kamailio-config=/path     existing Kamailio configuration
   --allow-no-kamailio         development install without Kamailio
   --development               acknowledge v0.1 is NOT SUITABLE FOR PRODUCTION
-  --remote                    configure supported host web server + PHP-FPM + HTTPS
+  --remote                    check/configure host web server + PHP-FPM + HTTPS
   --listen-address=address    remote listen IP (default 0.0.0.0)
   --listen-port=port          remote HTTPS port (default 8443)
-  --web-server=name           nginx or apache (auto-detected by default)
+  --web-server=name           nginx or apache (auto-detected when only one exists)
   --help, -h                  show this help
 EOF
 }
@@ -66,6 +73,28 @@ done
 say() { printf '%s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
+if [ "$CHECK_ONLY" -eq 0 ]; then
+    [ "$DEVELOPMENT_ACK" -eq 1 ] || fail "Atum v0.1 is NOT SUITABLE FOR PRODUCTION. Rerun with --development only on a test/non-production host."
+    [ "$(id -u)" -eq 0 ] || fail "System installation must run as root."
+    command -v flock >/dev/null 2>&1 || fail "System installation requires flock for lifecycle locking."
+    case "$LIFECYCLE_LOCK_PATH" in /*) ;; *) fail "Lifecycle lock path must be absolute: $LIFECYCLE_LOCK_PATH" ;; esac
+    [ "$LIFECYCLE_LOCK_PATH" != / ] || fail "Lifecycle lock path is unsafe: $LIFECYCLE_LOCK_PATH"
+    LOCK_PARENT=$(dirname -- "$LIFECYCLE_LOCK_PATH")
+    [ -d "$LOCK_PARENT" ] && [ ! -L "$LOCK_PARENT" ] || fail "Lifecycle lock parent must be an existing directory: $LOCK_PARENT"
+    [ "$(stat -c %u "$LOCK_PARENT" 2>/dev/null || echo -1)" = 0 ] || fail "Lifecycle lock parent is not root-owned: $LOCK_PARENT"
+    LOCK_PARENT_MODE=$(stat -c %a "$LOCK_PARENT" 2>/dev/null || echo 777)
+    [ $((0$LOCK_PARENT_MODE & 0022)) -eq 0 ] || fail "Lifecycle lock parent is writable by non-root users: $LOCK_PARENT"
+    if [ ! -e "$LIFECYCLE_LOCK_PATH" ]; then
+        mkdir -m 0700 "$LIFECYCLE_LOCK_PATH" || fail "Unable to create lifecycle lock directory: $LIFECYCLE_LOCK_PATH"
+    fi
+    [ -d "$LIFECYCLE_LOCK_PATH" ] && [ ! -L "$LIFECYCLE_LOCK_PATH" ] || fail "Lifecycle lock path is not a safe directory: $LIFECYCLE_LOCK_PATH"
+    [ "$(stat -c %u "$LIFECYCLE_LOCK_PATH" 2>/dev/null || echo -1)" = 0 ] || fail "Lifecycle lock path is not root-owned: $LIFECYCLE_LOCK_PATH"
+    LOCK_MODE=$(stat -c %a "$LIFECYCLE_LOCK_PATH" 2>/dev/null || echo 777)
+    [ $((0$LOCK_MODE & 0077)) -eq 0 ] || fail "Lifecycle lock path is accessible by non-root users: $LIFECYCLE_LOCK_PATH"
+    exec 9< "$LIFECYCLE_LOCK_PATH"
+    flock -n 9 || fail "Another Atum install or uninstall operation is already running."
+fi
+
 OS_ID=unknown
 OS_NAME=Unknown
 OS_LIKE=""
@@ -86,15 +115,21 @@ for pm in apt-get dnf yum zypper apk pkg brew; do
     command -v "$pm" >/dev/null 2>&1 && { PKG_MANAGER=$pm; break; }
 done
 
+NGINX_DETECTED=0
+APACHE_DETECTED=0
+command -v nginx >/dev/null 2>&1 && NGINX_DETECTED=1
+{ command -v apache2 >/dev/null 2>&1 || command -v httpd >/dev/null 2>&1; } && APACHE_DETECTED=1
 WEB_SERVER=none
 if [ -n "$WEB_SERVER_REQUEST" ]; then
     case "$WEB_SERVER_REQUEST" in nginx|apache) WEB_SERVER=$WEB_SERVER_REQUEST ;; *) fail "--web-server must be nginx or apache." ;; esac
 elif [ -n "${ATUM_WEB_SERVER:-}" ]; then
     case "$ATUM_WEB_SERVER" in nginx|apache|none) WEB_SERVER=$ATUM_WEB_SERVER ;; *) fail "ATUM_WEB_SERVER must be nginx, apache or none." ;; esac
-elif command -v apache2 >/dev/null 2>&1 || command -v httpd >/dev/null 2>&1; then
-    WEB_SERVER=apache
-elif command -v nginx >/dev/null 2>&1; then
+elif [ "$NGINX_DETECTED" -eq 1 ] && [ "$APACHE_DETECTED" -eq 1 ]; then
+    [ "$REMOTE_MODE" -eq 0 ] || fail "Both Nginx and Apache were detected. Use --web-server=nginx or --web-server=apache."
+elif [ "$NGINX_DETECTED" -eq 1 ]; then
     WEB_SERVER=nginx
+elif [ "$APACHE_DETECTED" -eq 1 ]; then
+    WEB_SERVER=apache
 fi
 
 FPM_BINARY=""
@@ -108,9 +143,12 @@ WEB_CONFIG=""
 WEB_ENABLE_LINK=""
 SERVICE_COMMAND="${ATUM_SERVICE_COMMAND:-systemctl}"
 if [ "$REMOTE_MODE" -eq 1 ]; then
-    [ "$DEVELOPMENT_ACK" -eq 1 ] || fail "Remote access requires the explicit --development acknowledgement."
+    [ "$CHECK_ONLY" -eq 1 ] || [ "$DEVELOPMENT_ACK" -eq 1 ] || fail "Remote access requires the explicit --development acknowledgement."
     [ "$KERNEL" = Linux ] || fail "Remote development deployment is currently supported only on Linux."
     command -v systemctl >/dev/null 2>&1 || fail "Remote development currently requires a systemd-managed Linux host."
+    command -v flock >/dev/null 2>&1 || fail "Remote development system installation requires flock."
+    command -v groupadd >/dev/null 2>&1 || fail "Remote development system installation requires groupadd."
+    command -v useradd >/dev/null 2>&1 || fail "Remote development system installation requires useradd."
     case "$LISTEN_ADDRESS" in *[!0-9a-fA-F:.]*|'') fail "--listen-address must be a literal IPv4 or IPv6 address." ;; esac
     php -r 'exit(filter_var($argv[1], FILTER_VALIDATE_IP) === false ? 1 : 0);' "$LISTEN_ADDRESS" >/dev/null 2>&1 || fail "--listen-address must be a valid literal IPv4 or IPv6 address."
     case "$LISTEN_PORT" in *[!0-9]*|'') fail "--listen-port must be an integer from 1 to 65535." ;; esac
@@ -240,8 +278,6 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
     exit 0
 fi
 
-[ "$DEVELOPMENT_ACK" -eq 1 ] || fail "Atum v0.1 is NOT SUITABLE FOR PRODUCTION. Rerun with --development only on a test/non-production host."
-[ "$(id -u)" -eq 0 ] || fail "System installation must be run as root."
 command -v groupadd >/dev/null 2>&1 || fail "This v0.1 system installer requires groupadd; use --check only on other platforms."
 command -v useradd >/dev/null 2>&1 || fail "This v0.1 system installer requires useradd; use --check only on other platforms."
 if [ -z "$KAMAILIO_CONFIG" ]; then

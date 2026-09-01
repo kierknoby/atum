@@ -13,11 +13,20 @@ sh -n install
 sh -n uninstall
 find . -type f -name '*.php' -print0 | xargs -0 -n1 php -l
 php utests/run.php
+php utests/remote-deployment.php
+sh utests/installer-preflight.sh
 sh utests/http.sh
-sudo sh utests/system-lifecycle.sh
 ```
 
-Security/state tests fail rather than skip when PDO SQLite is unavailable. The HTTP test requires loopback listener access. The isolated system lifecycle test requires root because it exercises account, link, install-ledger and uninstall behaviour using temporary application/state/configuration paths.
+Security/state tests fail rather than skip when PDO SQLite is unavailable. The HTTP test requires loopback listener access.
+
+The system lifecycle test requires root and creates and removes the system `atum` account and global CLI links. Run it only in an ephemeral or disposable Linux test environment, never on a normal workstation or persistent server:
+
+```sh
+sudo env "PATH=$PATH" sh utests/system-lifecycle.sh
+```
+
+Application, state, configuration, remote integration and service effects are directed to temporary fixtures, but the account and global link checks intentionally exercise the real system namespaces.
 
 A change that requires a new PHP extension must declare it in the relevant module's `module.xml` rather than assuming the extension exists.
 

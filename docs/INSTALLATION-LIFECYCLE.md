@@ -44,6 +44,20 @@ Remote mode additionally owns an individual Nginx/Apache vhost or drop-in, an in
 
 Where possible, Atum should own complete directory trees rather than place individual files inside unrelated application directories.
 
+## Source Checkout Boundary
+
+The Git checkout is an installation source, not an installed Atum path. `install-files.txt` is the authoritative list copied into the application tree. `.git`, tests and arbitrary tracked or untracked checkout content are excluded unless explicitly listed in that manifest.
+
+Installation, failed-install recovery and uninstall must not modify or remove the checkout. Updating the checkout does not update the separate installed application. v0.1 has no supported in-place update or state-preserving replacement procedure.
+
+## Lifecycle Lock
+
+Installation, interrupted-install recovery and uninstall hold the same exclusive lifecycle lock for the complete operation. The lock is acquired before an installer examines a provisional transaction and before an uninstaller examines the installation ledger.
+
+On Linux, Atum creates `/run/atum` as a root-owned mode-0700 runtime directory and uses `flock` on that Atum-specific directory inode. The protected `/run` parent, ownership checks, restrictive permissions and symlink rejection prevent an unprivileged user from pre-creating, replacing or acquiring the lock object. A concurrent lifecycle command fails clearly. Once a process exits, the kernel releases the lock and a later installer can recover a genuinely interrupted transaction.
+
+`/run/atum` is a transient lifecycle coordination artefact, not an installed application or configuration path. It is intentionally not placed in the installation ledger because the lock must exist before the ledger can be examined and must remain a stable inode across contending operations. It may remain after an operation and is cleared with the host's normal volatile `/run` lifecycle. This fixed, root-controlled runtime artefact is the documented exception to ledger tracking; it must not contain application state or secrets.
+
 ## Installation Identifier
 
 A system installation receives a unique installation ID.
@@ -75,7 +89,7 @@ The ledger records information such as:
 - Atum system user/group and whether the installer created them;
 - operating-system packages that were absent before installation and added by the Atum dependency transaction;
 - selected Kamailio root configuration;
-- install-time hashes of recursively discovered Kamailio configuration files;
+- install-time hashes of files in the statically recognisable literal include/import scope;
 - Atum-created host integrations where supported;
 - shared host-file backups/hashes where a future integration cannot use a dedicated drop-in;
 - service state required to restore an existing service after removing an Atum-specific integration.
