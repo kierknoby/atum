@@ -9,6 +9,7 @@ final class AtumRemoteDeployment
     private array $created = [];
     /** @var list<string> */
     private array $reloadServices = [];
+    private bool $verbose = false;
 
     public function __construct(private readonly string $transactionDir)
     {
@@ -19,6 +20,7 @@ final class AtumRemoteDeployment
      */
     public function install(array $options): array
     {
+        $this->verbose = ($options['verbose'] ?? '0') === '1';
         $required = ['target', 'config-dir', 'listen-address', 'listen-port', 'web-server',
             'web-config', 'fpm-config', 'fpm-socket', 'fpm-service', 'web-service', 'web-group',
             'fpm-binary', 'web-config-test-binary', 'web-config-test-argument'];
@@ -67,10 +69,15 @@ final class AtumRemoteDeployment
         $command = escapeshellarg($openssl) . ' req -x509 -newkey rsa:3072 -sha256 -nodes -days 30'
             . ' -subj ' . escapeshellarg($subject)
             . ' -keyout ' . escapeshellarg($key) . ' -out ' . escapeshellarg($certificate);
+        $this->showCommand($command);
         exec($command . ' 2>&1', $output, $status);
+        $this->showOutput($output);
         if ($status !== 0 || !is_file($certificate) || !is_file($key)) {
             @unlink($certificate); @unlink($key);
-            throw new RuntimeException('Unable to generate the self-signed development certificate.');
+            throw new RuntimeException($this->withCommandOutput(
+                'Unable to generate the self-signed development certificate.',
+                $output
+            ));
         }
         chmod($key, 0600);
         chmod($certificate, 0644);
@@ -322,18 +329,52 @@ final class AtumRemoteDeployment
         if (!preg_match('/^[A-Za-z0-9@_.-]+$/', $service)) {
             throw new RuntimeException('Invalid service name.');
         }
-        exec(escapeshellarg($command) . ' ' . $action . ' ' . escapeshellarg($service) . ' 2>&1', $output, $status);
+        $commandLine = escapeshellarg($command) . ' ' . $action . ' ' . escapeshellarg($service);
+        $this->showCommand($commandLine);
+        exec($commandLine . ' 2>&1', $output, $status);
+        $this->showOutput($output);
         if ($status !== 0) {
-            throw new RuntimeException('Unable to ' . $action . ' service ' . $service . '.');
+            throw new RuntimeException($this->withCommandOutput(
+                'Unable to ' . $action . ' service ' . $service . '.',
+                $output
+            ));
         }
     }
 
     private function validateCommand(string $command, string $argument, string $label): void
     {
-        exec(escapeshellarg($command) . ' ' . escapeshellarg($argument) . ' 2>&1', $output, $status);
+        $commandLine = escapeshellarg($command) . ' ' . escapeshellarg($argument);
+        $this->showCommand($commandLine);
+        exec($commandLine . ' 2>&1', $output, $status);
+        $this->showOutput($output);
         if ($status !== 0) {
-            throw new RuntimeException($label . ' rejected the generated configuration.');
+            throw new RuntimeException($this->withCommandOutput(
+                $label . ' rejected the generated configuration.',
+                $output
+            ));
         }
+    }
+
+    /** @param list<string> $output */
+    private function showOutput(array $output): void
+    {
+        if ($this->verbose && $output !== []) {
+            echo implode("\n", $output) . "\n";
+        }
+    }
+
+    private function showCommand(string $command): void
+    {
+        if ($this->verbose) {
+            echo '$ ' . $command . "\n";
+        }
+    }
+
+    /** @param list<string> $output */
+    private function withCommandOutput(string $message, array $output): string
+    {
+        $details = trim(implode("\n", $output));
+        return $details === '' ? $message : $message . "\n" . $details;
     }
 
     public function rollback(string $serviceCommand = 'systemctl'): void

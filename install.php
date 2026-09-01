@@ -53,6 +53,8 @@ $options = [
     'web-config-test-argument' => '',
     'start-web-service' => '0',
     'start-fpm-service' => '0',
+    'progress' => '0',
+    'verbose' => '0',
     'service-command' => 'systemctl',
     'openssl' => 'openssl',
 ];
@@ -160,7 +162,22 @@ function chmodTreeOwner(string $path, string $user, string $group): void
     }
 }
 
+function progressStart(array $options, int $stage, string $label): void
+{
+    if ($options['progress'] === '1') {
+        echo "[{$stage}/6] {$label}\n";
+    }
+}
+
+function progressDone(array $options): void
+{
+    if ($options['progress'] === '1') {
+        echo "      done\n";
+    }
+}
+
 try {
+    progressStart($options, 4, 'Installing Atum application files');
     if (file_exists($target) || file_exists($stateDir) || file_exists($configDir)) {
         throw new RuntimeException('Atum target, state or configuration path already exists. Refusing to overwrite it.');
     }
@@ -236,6 +253,15 @@ try {
     }
     $uninstallCreated = true;
     $created[] = ['type' => 'symlink', 'path' => $uninstallLink, 'target' => $uninstallLinkTarget];
+    progressDone($options);
+
+    progressStart(
+        $options,
+        5,
+        $options['remote'] === '1'
+            ? 'Configuring and validating PHP-FPM and remote HTTPS'
+            : 'Configuring Atum application state'
+    );
 
     if ($options['remote'] === '1') {
         require_once $target . '/admin/libraries/Atum/RemoteDeployment.class.php';
@@ -259,6 +285,7 @@ try {
             'web-config-test-argument' => $options['web-config-test-argument'],
             'start-web-service' => $options['start-web-service'],
             'start-fpm-service' => $options['start-fpm-service'],
+            'verbose' => $options['verbose'],
             'service-command' => $options['service-command'],
             'openssl' => $options['openssl'],
         ]);
@@ -280,11 +307,17 @@ try {
     require_once $target . '/admin/libraries/Atum/InstallerCredentials.class.php';
     $atum = Atum::create();
     $atum->Modules->installBundled(true);
+    progressDone($options);
+    progressStart($options, 6, 'Creating initial administrator');
+    if ($options['progress'] === '1') {
+        echo "\n";
+    }
     $username = AtumInstallerCredentials::createAdministrator(
         static function (string $acceptedUsername, string $acceptedPassword) use ($atum): void {
             $atum->Auth->createUser($acceptedUsername, $acceptedPassword, 'admin');
         }
     );
+    progressDone($options);
 
     $kamailioFiles = [];
     if ($kamailioConfig !== '' && is_readable($kamailioConfig)) {
@@ -363,9 +396,9 @@ try {
     @chgrp($configDir . '/atum.conf', 'atum');
 
     $committed = true;
-    echo "Atum installed to {$target}.\n";
-    echo "Initial administrator: {$username}\n";
-    echo "Kamailio configuration was not modified.\n";
+    if ($options['progress'] === '1') {
+        echo "Initial administrator: {$username}\n";
+    }
 } catch (Throwable $e) {
     fwrite(STDERR, "Install failed: {$e->getMessage()}\n");
     if ($cliCreated && is_link($cliLink)

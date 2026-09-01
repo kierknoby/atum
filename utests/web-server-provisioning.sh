@@ -44,6 +44,11 @@ EOF
 #!/bin/sh
 [ "\$1" = update ] && exit 0
 printf '%s\n' "\$@" >> "$case_root/apt.log"
+printf 'mock package-manager output: %s\n' "\$*"
+if [ -e "$case_root/fail-packages" ]; then
+    echo 'mock package-manager fatal diagnostic' >&2
+    exit 42
+fi
 for package in "\$@"; do
     case "\$package" in
         nginx)
@@ -126,6 +131,36 @@ grep -q nginx "$nginx_case/apt.log"
 ! [ -e "$nginx_case/policy-rc.d" ]
 ! [ -L "$nginx_case/nginx/sites-enabled/default" ]
 grep -q -- '--packages-added=.*nginx' "$nginx_case/php-arguments"
+grep -q '^Atum 0.1 Development Preview$' "$nginx_case/output"
+grep -q '^Preparing remote Atum installation$' "$nginx_case/output"
+grep -q '^Web server: Nginx (will be installed)$' "$nginx_case/output"
+grep -q '^Atum requires:$' "$nginx_case/output"
+grep -q '^  Nginx web server$' "$nginx_case/output"
+grep -q '^Install required packages? yes (--yes)$' "$nginx_case/output"
+! grep -q '^Operating system :' "$nginx_case/output"
+! grep -q 'Install required operating-system package' "$nginx_case/output"
+! grep -q 'mock package-manager output' "$nginx_case/output"
+! grep -q 'PUBLIC_IP' "$nginx_case/output"
+[ "$(grep -c '^Kamailio configuration remains unchanged\.$' "$nginx_case/output")" -eq 1 ]
+grep -q '^No firewall rules were changed\.' "$nginx_case/output"
+grep -q '^The development certificate is self-signed\.$' "$nginx_case/output"
+stage1=$(grep -n '^\[1/6\] Checking host$' "$nginx_case/output" | cut -d: -f1)
+stage2=$(grep -n '^\[2/6\] Installing system dependencies$' "$nginx_case/output" | cut -d: -f1)
+stage3=$(grep -n '^\[3/6\] Creating Atum service account$' "$nginx_case/output" | cut -d: -f1)
+[ "$stage1" -lt "$stage2" ] && [ "$stage2" -lt "$stage3" ]
+
+verbose_case=$(make_case verbose-output nginx no)
+run_install "$verbose_case" --yes --verbose
+grep -q '^Atum GUI installation pre-flight$' "$verbose_case/output"
+grep -q '^Operating system :' "$verbose_case/output"
+grep -q '^  Packages: .*nginx' "$verbose_case/output"
+grep -q 'mock package-manager output' "$verbose_case/output"
+
+package_failure_case=$(make_case package-failure nginx no)
+touch "$package_failure_case/fail-packages"
+if run_install "$package_failure_case" --yes; then echo 'package-manager failure was accepted' >&2; exit 1; fi
+grep -q 'Package installation failed; package-manager output follows' "$package_failure_case/output"
+grep -q 'mock package-manager fatal diagnostic' "$package_failure_case/output"
 
 installed_dependency_case=$(make_case installed-fpm nginx no)
 printf '%s\n' php-fpm > "$installed_dependency_case/packages/installed"

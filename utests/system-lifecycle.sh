@@ -149,6 +149,25 @@ PATH="$TEST_ROOT/bin:$PATH" "$ROOT/install" --development --remote --allow-no-ka
 grep -q 'Recovering interrupted Atum installation' "$TEST_ROOT/remote-install.out"
 grep -q 'NOT SUITABLE FOR PRODUCTION' "$TEST_ROOT/remote-install.out"
 grep -q 'No firewall rules were changed' "$TEST_ROOT/remote-install.out"
+! grep -q '^Operating system :' "$TEST_ROOT/remote-install.out"
+! grep -q 'PUBLIC_IP' "$TEST_ROOT/remote-install.out"
+[ "$(grep -c '^Kamailio configuration remains unchanged\.$' "$TEST_ROOT/remote-install.out")" -eq 1 ]
+grep -q '^Initial administrator: testadmin$' "$TEST_ROOT/remote-install.out"
+! grep -q '^Username \[admin\]:' "$TEST_ROOT/remote-install.out"
+previous_stage=0
+for stage_label in \
+    '[1/6] Checking host' \
+    '[2/6] Installing system dependencies' \
+    '[3/6] Creating Atum service account' \
+    '[4/6] Installing Atum application files' \
+    '[5/6] Configuring and validating PHP-FPM and remote HTTPS' \
+    '[6/6] Creating initial administrator'; do
+    stage_line=$(grep -nF "$stage_label" "$TEST_ROOT/remote-install.out" | cut -d: -f1)
+    [ -n "$stage_line" ] && [ "$stage_line" -gt "$previous_stage" ]
+    previous_stage=$stage_line
+done
+grep -q '^Open:$' "$TEST_ROOT/remote-install.out"
+grep -q '^https://' "$TEST_ROOT/remote-install.out"
 grep -q '"remote_development"' "$ATUM_CONFIG_DIR/install-ledger.json"
 [ -f "$ATUM_NGINX_CONFIG_DIR/atum.conf" ] && [ -f "$ATUM_FPM_POOL_DIR/atum.conf" ]
 [ "$(stat -c %a "$ATUM_CONFIG_DIR/tls/development.key")" = 600 ]

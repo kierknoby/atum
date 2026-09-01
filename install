@@ -4,6 +4,7 @@ set -eu
 
 ATUM_MIN_PHP="8.2.0"
 SOURCE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+. "$SOURCE_DIR/installer/presentation.sh"
 PREFIX="${ATUM_PREFIX:-/usr/share/atum}"
 STATE_DIR="${ATUM_STATE_DIR:-/var/lib/atum}"
 CONFIG_DIR="${ATUM_CONFIG_DIR:-/etc/atum}"
@@ -21,6 +22,7 @@ REMOTE_MODE=0
 LISTEN_ADDRESS=0.0.0.0
 LISTEN_PORT=8443
 WEB_SERVER_REQUEST=""
+VERBOSE=0
 TRANSACTION_DIR="${ATUM_TRANSACTION_DIR:-/var/lib/atum-install-transaction}"
 LIFECYCLE_LOCK_PATH="${ATUM_LIFECYCLE_LOCK_PATH:-/run/atum}"
 RECOVERED_PACKAGES=""
@@ -40,6 +42,7 @@ authoritative installed application file set.
   --check                     pre-flight only; make no changes
   --no-deps                   do not install missing OS packages
   --yes, -y                   answer yes to dependency prompts
+  --verbose                   show detailed pre-flight, package and service output
   --prefix=/path              application path (default /usr/share/atum)
   --kamailio-config=/path     existing Kamailio configuration
   --allow-no-kamailio         development install without Kamailio
@@ -57,6 +60,7 @@ for arg in "$@"; do
         --check) CHECK_ONLY=1 ;;
         --no-deps) NO_DEPS=1 ;;
         --yes|-y) ASSUME_YES=1 ;;
+        --verbose) VERBOSE=1 ;;
         --prefix=*) PREFIX=${arg#--prefix=} ;;
         --kamailio-config=*) KAMAILIO_CONFIG=${arg#--kamailio-config=} ;;
         --allow-no-kamailio) ALLOW_NO_KAMAILIO=1 ;;
@@ -72,6 +76,8 @@ done
 
 say() { printf '%s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+stage_begin() { say "[$1/6] $2"; }
+stage_done() { say "      done"; }
 
 if [ "$CHECK_ONLY" -eq 0 ]; then
     [ "$DEVELOPMENT_ACK" -eq 1 ] || fail "Atum v0.1 is NOT SUITABLE FOR PRODUCTION. Rerun with --development only on a test/non-production host."
@@ -151,8 +157,9 @@ for candidate in php-fpm php-fpm8.2 php-fpm8.3 php-fpm8.4 php-fpm8.5; do command
 WEB_SERVER_LABEL=$WEB_SERVER
 if [ "$REMOTE_MODE" -eq 1 ] && [ "$WEB_SERVER" != none ]; then
     if [ "$WEB_SERVER_WAS_PRESENT" -eq 1 ]; then WEB_SERVER_LABEL="$WEB_SERVER (detected; reused)"
-    else WEB_SERVER_LABEL="$WEB_SERVER (selected for provisioning; not installed)"; fi
+    else WEB_SERVER_LABEL="$WEB_SERVER (selected; not installed)"; fi
 fi
+case "$WEB_SERVER" in nginx) WEB_SERVER_NAME=Nginx ;; apache) WEB_SERVER_NAME=Apache ;; *) WEB_SERVER_NAME=None ;; esac
 case "$WEB_SERVER:$PKG_MANAGER" in
     nginx:*) WEB_SERVER_PACKAGE=nginx; WEB_SERVER_SERVICE=nginx ;;
     apache:apt-get) WEB_SERVER_PACKAGE=apache2; WEB_SERVER_SERVICE=apache2 ;;
@@ -311,27 +318,68 @@ discover_db_schemes() {
 }
 discover_db_schemes
 
-say "Atum GUI installation pre-flight"
-say ""
-say "WARNING          : DEVELOPMENT PREVIEW - NOT SUITABLE FOR PRODUCTION"
-say "Operating system : $OS_NAME"
-say "Package manager  : ${PKG_MANAGER:-not detected}"
-say "Service manager  : $SERVICE_MANAGER"
-say "Web server       : $WEB_SERVER_LABEL$([ "$REMOTE_MODE" -eq 1 ] && printf '%s' ' (remote development configuration requested)' || true)"
-say "PHP              : $PHP_VERSION (minimum $ATUM_MIN_PHP)"
-say "PHP-FPM          : ${FPM_BINARY:-missing}"
-say "Missing PHP ext  : ${MISSING_EXT:-unavailable until PHP is installed}"
-say "Kamailio binary  : ${KAMAILIO_BINARY:-not found}"
-say "Kamailio version : $KAMAILIO_VERSION"
-say "Kamailio config  : ${KAMAILIO_CONFIG:-not found}"
-say "DB schemes seen  : ${DB_SCHEMES:-none/unknown}"
-say "Application      : $PREFIX"
-say "State            : $STATE_DIR"
-say "Configuration    : $CONFIG_DIR"
-[ "$REMOTE_MODE" -eq 0 ] || say "Remote HTTPS     : $LISTEN_ADDRESS:$LISTEN_PORT"
-say ""
+print_detailed_preflight() {
+    say "Atum GUI installation pre-flight"
+    say ""
+    say "WARNING          : DEVELOPMENT PREVIEW - NOT SUITABLE FOR PRODUCTION"
+    say "Operating system : $OS_NAME"
+    say "Package manager  : ${PKG_MANAGER:-not detected}"
+    say "Service manager  : $SERVICE_MANAGER"
+    say "Web server       : $WEB_SERVER_LABEL"
+    say "PHP              : $PHP_VERSION (minimum $ATUM_MIN_PHP)"
+    say "PHP-FPM          : ${FPM_BINARY:-missing}"
+    if [ "$PHP_OK" -eq 1 ]; then
+        say "Missing PHP ext  : ${MISSING_EXT:-none}"
+    else
+        say "Missing PHP ext  : unavailable until PHP is installed"
+    fi
+    say "Kamailio binary  : ${KAMAILIO_BINARY:-not found}"
+    say "Kamailio version : $KAMAILIO_VERSION"
+    say "Kamailio config  : ${KAMAILIO_CONFIG:-not found}"
+    say "DB schemes seen  : ${DB_SCHEMES:-none/unknown}"
+    say "Application      : $PREFIX"
+    say "State            : $STATE_DIR"
+    say "Configuration    : $CONFIG_DIR"
+    [ "$REMOTE_MODE" -eq 0 ] || say "Remote HTTPS     : $LISTEN_ADDRESS:$LISTEN_PORT"
+    say ""
+}
+
+print_normal_summary() {
+    say "Atum 0.1 Development Preview"
+    say "NOT SUITABLE FOR PRODUCTION"
+    say ""
+    if [ -n "$KAMAILIO_BINARY" ]; then
+        if [ "$KAMAILIO_VERSION" = unknown ]; then
+            say "Kamailio detected (version unknown)"
+        else
+            say "Kamailio $KAMAILIO_VERSION detected"
+        fi
+    elif [ -n "$KAMAILIO_CONFIG" ]; then
+        say "Kamailio configuration detected"
+    elif [ "$ALLOW_NO_KAMAILIO" -eq 1 ]; then
+        say "Kamailio was not detected; proceeding only because --allow-no-kamailio was specified."
+    else
+        say "Kamailio was not detected."
+    fi
+    say "Configuration: ${KAMAILIO_CONFIG:-not found}"
+    if [ "$REMOTE_MODE" -eq 1 ]; then
+        if [ "$WEB_SERVER_WAS_PRESENT" -eq 1 ]; then
+            say "Web server: $WEB_SERVER_NAME (existing installation will be reused)"
+        else
+            say "Web server: $WEB_SERVER_NAME (will be installed)"
+        fi
+        say "HTTPS bind: $LISTEN_ADDRESS:$LISTEN_PORT"
+        say ""
+        say "Preparing remote Atum installation"
+    else
+        say ""
+        say "Preparing local Atum installation"
+    fi
+    say ""
+}
 
 if [ "$CHECK_ONLY" -eq 1 ]; then
+    print_detailed_preflight
     CHECK_MISSING=""
     for utility in flock groupadd useradd; do
         command -v "$utility" >/dev/null 2>&1 || CHECK_MISSING="${CHECK_MISSING}${CHECK_MISSING:+|}${utility}"
@@ -347,6 +395,16 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
     fi
     exit 0
 fi
+
+if [ "$VERBOSE" -eq 1 ]; then
+    print_detailed_preflight
+    say "Preparing $([ "$REMOTE_MODE" -eq 1 ] && printf '%s' remote || printf '%s' local) Atum installation"
+    say ""
+else
+    print_normal_summary
+fi
+
+stage_begin 1 "Checking host"
 
 command -v groupadd >/dev/null 2>&1 || fail "This v0.1 system installer requires groupadd; use --check only on other platforms."
 command -v useradd >/dev/null 2>&1 || fail "This v0.1 system installer requires useradd; use --check only on other platforms."
@@ -535,11 +593,12 @@ BEFORE=$(mktemp)
 AFTER=$(mktemp)
 ENABLED_BEFORE=$(mktemp)
 ENABLED_AFTER=$(mktemp)
+PACKAGE_OUTPUT=$(mktemp)
 snapshot_enabled_units() { "$SERVICE_COMMAND" list-unit-files --state=enabled --no-legend --no-pager 2>/dev/null | awk '{print $1}' | sort -u; }
 rollback_install() {
     status=$?
     trap - EXIT HUP INT TERM
-    rm -f "$BEFORE" "$AFTER" "$ENABLED_BEFORE" "$ENABLED_AFTER"
+    rm -f "$BEFORE" "$AFTER" "$ENABLED_BEFORE" "$ENABLED_AFTER" "$PACKAGE_OUTPUT"
     if [ "$status" -ne 0 ] && [ "$INSTALL_COMMITTED" -eq 0 ]; then
         remove_package_start_suppression || true
         for record in "$TRANSACTION_DIR"/package-enabled-unit-*; do
@@ -556,6 +615,8 @@ rollback_install() {
 trap rollback_install EXIT HUP INT TERM
 snapshot_packages > "$BEFORE"
 snapshot_enabled_units > "$ENABLED_BEFORE"
+stage_done
+stage_begin 2 "Installing system dependencies"
 
 refresh_packages_added() {
     snapshot_packages > "$AFTER"
@@ -591,10 +652,48 @@ missing_packages() {
     for package in "$@"; do package_is_installed "$package" || printf '%s\n' "$package"; done
 }
 
+describe_packages() {
+    need_php=0
+    need_fpm=0
+    need_sqlite=0
+    need_https=0
+    need_nginx=0
+    need_apache=0
+    for package in "$@"; do
+        case "$package" in
+            php-cli|php-common) need_php=1 ;;
+            php-fpm) need_fpm=1 ;;
+            php-sqlite3|php-pdo) need_sqlite=1 ;;
+            openssl) need_https=1 ;;
+            nginx) need_nginx=1 ;;
+            apache2|httpd) need_apache=1 ;;
+        esac
+    done
+    say ""
+    say "Atum requires:"
+    if [ "$need_php" -eq 1 ] && [ "$need_fpm" -eq 1 ]; then
+        say "  PHP 8.2 or newer and PHP-FPM"
+    elif [ "$need_php" -eq 1 ]; then
+        say "  PHP 8.2 or newer"
+    elif [ "$need_fpm" -eq 1 ]; then
+        PHP_MM=$(php -r 'echo PHP_MAJOR_VERSION,".",PHP_MINOR_VERSION;' 2>/dev/null || true)
+        say "  PHP ${PHP_MM:-8.2 or newer} and matching PHP-FPM"
+    fi
+    [ "$need_sqlite" -eq 0 ] || say "  SQLite support for PHP"
+    [ "$need_nginx" -eq 0 ] || say "  Nginx web server"
+    [ "$need_apache" -eq 0 ] || say "  Apache web server"
+    [ "$need_https" -eq 0 ] || say "  HTTPS certificate support"
+    [ "$VERBOSE" -eq 0 ] || say "  Packages: $*"
+}
+
 confirm_packages() {
-    [ "$ASSUME_YES" -eq 1 ] && return 0
-    [ -r /dev/tty ] || return 1
-    printf 'Install required operating-system package(s): %s? [y/N] ' "$*" > /dev/tty
+    describe_packages "$@"
+    if [ "$ASSUME_YES" -eq 1 ]; then
+        say "Install required packages? yes (--yes)"
+        return 0
+    fi
+    [ -r /dev/tty ] || { say "Package installation needs confirmation; rerun with --yes for non-interactive use." >&2; return 1; }
+    printf 'Install required packages? [y/N] ' > /dev/tty
     read answer < /dev/tty || return 1
     case "$answer" in y|Y|yes|YES|Yes) return 0 ;; *) return 1 ;; esac
 }
@@ -611,10 +710,26 @@ install_packages() {
     fi
     case "$PKG_MANAGER" in
         apt-get)
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@" || { remove_package_start_suppression || true; refresh_packages_added; return 1; }
+            if [ "$VERBOSE" -eq 1 ]; then
+                DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@" || { remove_package_start_suppression || true; refresh_packages_added; return 1; }
+            elif ! DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@" > "$PACKAGE_OUTPUT" 2>&1; then
+                say "Package installation failed; package-manager output follows:" >&2
+                cat "$PACKAGE_OUTPUT" >&2
+                remove_package_start_suppression || true
+                refresh_packages_added
+                return 1
+            fi
             ;;
         dnf|yum)
-            "$PKG_MANAGER" install -y "$@" || { remove_package_start_suppression || true; refresh_packages_added; return 1; }
+            if [ "$VERBOSE" -eq 1 ]; then
+                "$PKG_MANAGER" install -y "$@" || { remove_package_start_suppression || true; refresh_packages_added; return 1; }
+            elif ! "$PKG_MANAGER" install -y "$@" > "$PACKAGE_OUTPUT" 2>&1; then
+                say "Package installation failed; package-manager output follows:" >&2
+                cat "$PACKAGE_OUTPUT" >&2
+                remove_package_start_suppression || true
+                refresh_packages_added
+                return 1
+            fi
             ;;
         *) return 1 ;;
     esac
@@ -696,7 +811,9 @@ fi
 
 refresh_packages_added
 discover_db_schemes
-say "Kamailio DB use : ${DB_SCHEMES:-none/unknown} (reported only; adapters are module dependencies)"
+[ "$VERBOSE" -eq 0 ] || say "Kamailio DB use : ${DB_SCHEMES:-none/unknown} (reported only; adapters are module dependencies)"
+stage_done
+stage_begin 3 "Creating Atum service account"
 
 if (command -v getent >/dev/null 2>&1 && getent group atum >/dev/null 2>&1) || id atum >/dev/null 2>&1 || grep -q '^atum:' /etc/group 2>/dev/null; then
     fail "A pre-existing user or group named 'atum' exists. Refusing to reuse an identity Atum did not create."
@@ -710,6 +827,7 @@ journal_put intended-user 1
 useradd --system --gid atum --home-dir "$STATE_DIR" --shell "$NOLOGIN_SHELL" atum
 USER_CREATED=1
 journal_put user-created 1
+stage_done
 
 ATUM_INSTALL_BOOTSTRAPPED=1 php "$SOURCE_DIR/install.php" \
     --prefix="$PREFIX" \
@@ -739,6 +857,8 @@ ATUM_INSTALL_BOOTSTRAPPED=1 php "$SOURCE_DIR/install.php" \
     --web-config-test-argument="$WEB_CONFIG_TEST_ARGUMENT" \
     --start-web-service="$([ "$WEB_SERVER_WAS_PRESENT" -eq 0 ] && printf '%s' 1 || printf '%s' 0)" \
     --start-fpm-service="$([ "$FPM_WAS_PRESENT" -eq 0 ] && printf '%s' 1 || printf '%s' 0)" \
+    --progress=1 \
+    --verbose="$VERBOSE" \
     --service-command="$SERVICE_COMMAND" \
     --openssl="$(command -v openssl 2>/dev/null || true)"
 
@@ -747,19 +867,24 @@ find "$TRANSACTION_DIR" -mindepth 1 -maxdepth 1 -type f -exec rm -f {} \;
 rmdir "$TRANSACTION_DIR"
 
 say ""
-say "Atum installed without modifying Kamailio."
+say "Atum installed successfully."
+say ""
+say "Installed at: $PREFIX"
+say "Kamailio configuration remains unchanged."
 if [ "$REMOTE_MODE" -eq 1 ]; then
+    HOST_ADDRESSES=$(hostname -I 2>/dev/null || true)
+    OPEN_URL=$(atum_https_url "$LISTEN_ADDRESS" "$LISTEN_PORT" "$HOST_ADDRESSES" "${SSH_CONNECTION:-}")
+    LISTEN_URL_HOST=$(atum_url_host "$LISTEN_ADDRESS")
+    say "Web server: $WEB_SERVER_NAME"
+    say "PHP-FPM: dedicated Atum pool"
+    say "HTTPS is listening on $LISTEN_URL_HOST:$LISTEN_PORT."
     say ""
-    say "Atum remote development installation complete."
-    say "Web server      : $WEB_SERVER"
-    say "PHP-FPM        : dedicated Atum pool"
-    say "HTTPS          : enabled using an Atum-generated self-signed development certificate"
-    say "Listen address : $LISTEN_ADDRESS"
-    say "Listen port    : $LISTEN_PORT"
-    say "Installed at   : $PREFIX"
-    say "Open           : https://PUBLIC_IP:$LISTEN_PORT/"
-    say "Your browser will warn because the certificate is self-signed and does not provide trusted identity verification."
+    say "Open:"
+    say "$OPEN_URL"
+    say ""
+    say "The development certificate is self-signed."
     say "No firewall rules were changed. Permit TCP/$LISTEN_PORT only from your trusted administration address or network."
+    say ""
     say "NOT SUITABLE FOR PRODUCTION."
 else
     say "Run for local testing: sudo -u atum atum serve"

@@ -45,12 +45,12 @@ host_snapshot "$TEST_ROOT/host-before"
 # Invalid username, short password and confirmation mismatch all retry within
 # the real credential collector. The persistence callback is reached once.
 "$ROOT/utests/pty-driver.pl" \
-    --step='Administrator username|input|21210a' \
-    --step='Administrator username|input|726574727961646d696e0a' \
-    --step='Administrator password|input|73686f72740a' \
-    --step='Administrator password|input|436f72726563742070617373776f7264203132330a' \
+    --step='Username [admin]|input|21210a' \
+    --step='Username [admin]|input|726574727961646d696e0a' \
+    --step='Password:|input|73686f72740a' \
+    --step='Password:|input|436f72726563742070617373776f7264203132330a' \
     --step='Confirm password|input|646966666572656e742070617373776f7264203132330a' \
-    --step='Administrator password|input|436f72726563742070617373776f7264203132330a' \
+    --step='Password:|input|436f72726563742070617373776f7264203132330a' \
     --step='Confirm password|input|436f72726563742070617373776f7264203132330a' \
     -- "$PHP_BIN" "$ROOT/utests/installer-credential-fixture.php" \
     "$TEST_ROOT/interactive-record.json" "$TEST_ROOT/interactive-stages" \
@@ -82,13 +82,13 @@ run_eof_case() {
 }
 
 run_eof_case eof-username \
-    --step='Administrator username|eof|'
+    --step='Username [admin]|eof|'
 run_eof_case eof-password \
-    --step='Administrator username|input|726574727961646d696e0a' \
-    --step='Administrator password|eof|'
+    --step='Username [admin]|input|726574727961646d696e0a' \
+    --step='Password:|eof|'
 run_eof_case eof-confirmation \
-    --step='Administrator username|input|726574727961646d696e0a' \
-    --step='Administrator password|input|436f72726563742070617373776f7264203132330a' \
+    --step='Username [admin]|input|726574727961646d696e0a' \
+    --step='Password:|input|436f72726563742070617373776f7264203132330a' \
     --step='Confirm password|eof|'
 
 # SIGINT is delivered at every actual input phase to the collector and its
@@ -110,13 +110,13 @@ run_interrupt_case() {
 }
 
 run_interrupt_case interrupt-username \
-    --step='Administrator username|interrupt|'
+    --step='Username [admin]|interrupt|'
 run_interrupt_case interrupt-password \
-    --step='Administrator username|input|726574727961646d696e0a' \
-    --step='Administrator password|interrupt|'
+    --step='Username [admin]|input|726574727961646d696e0a' \
+    --step='Password:|interrupt|'
 run_interrupt_case interrupt-confirmation \
-    --step='Administrator username|input|726574727961646d696e0a' \
-    --step='Administrator password|input|436f72726563742070617373776f7264203132330a' \
+    --step='Username [admin]|input|726574727961646d696e0a' \
+    --step='Password:|input|436f72726563742070617373776f7264203132330a' \
     --step='Confirm password|interrupt|'
 
 # The PTY driver itself must reap its child session when the surrounding test
@@ -128,7 +128,7 @@ run_driver_signal_case() {
     ready="$TEST_ROOT/driver-$name-ready"
     provisional="$TEST_ROOT/driver-$name-provisional"
     "$ROOT/utests/pty-driver.pl" \
-        --step="Administrator username|ready|$ready" -- \
+        --step="Username [admin]|ready|$ready" -- \
         "$ROOT/utests/installer-credential-signal.sh" "$PHP_BIN" \
         "$ROOT/utests/installer-credential-fixture.php" \
         "$TEST_ROOT/driver-$name-record.json" "$TEST_ROOT/driver-$name-stages" \
@@ -165,7 +165,7 @@ bad_user_status=$?
 set -e
 [ "$bad_user_status" -ne 0 ]
 grep -q 'Username must be 3-64 characters' "$TEST_ROOT/noninteractive-bad-user.out"
-! grep -q 'Administrator username \[' "$TEST_ROOT/noninteractive-bad-user.out"
+! grep -q 'Username \[' "$TEST_ROOT/noninteractive-bad-user.out"
 [ ! -e "$TEST_ROOT/noninteractive-bad-user.json" ]
 
 printf '%s\n' 'short' > "$TEST_ROOT/bad-policy-password"
@@ -177,7 +177,7 @@ bad_password_status=$?
 set -e
 [ "$bad_password_status" -ne 0 ]
 grep -q 'Password must be at least 12 characters' "$TEST_ROOT/noninteractive-bad-password.out"
-! grep -q 'Administrator password' "$TEST_ROOT/noninteractive-bad-password.out"
+! grep -q '^Password:' "$TEST_ROOT/noninteractive-bad-password.out"
 [ ! -e "$TEST_ROOT/noninteractive-bad-password.json" ]
 
 set +e
@@ -188,7 +188,7 @@ incomplete_status=$?
 set -e
 [ "$incomplete_status" -ne 0 ]
 grep -q 'must be supplied together' "$TEST_ROOT/noninteractive-incomplete.out"
-! grep -q 'Administrator password' "$TEST_ROOT/noninteractive-incomplete.out"
+! grep -q '^Password:' "$TEST_ROOT/noninteractive-incomplete.out"
 [ ! -e "$TEST_ROOT/noninteractive-incomplete.json" ]
 
 printf '%s\n' 'Valid password 123' > "$TEST_ROOT/good-password"

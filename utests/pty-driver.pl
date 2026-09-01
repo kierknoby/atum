@@ -28,7 +28,7 @@ $SIG{INT} = sub { reap_child_group(); exit 130; };
 $SIG{TERM} = sub { reap_child_group(); exit 143; };
 END { reap_child_group(); }
 
-my ($mode, $input, $wait_for) = ('input', '', 'Administrator username');
+my ($mode, $input, $wait_for) = ('input', '', 'Username [admin]');
 my @steps;
 while (@ARGV && $ARGV[0] ne '--') {
     my $argument = shift @ARGV;

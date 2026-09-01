@@ -38,6 +38,7 @@ try {
     expect($serveStatus !== 0 && str_contains(implode("\n", $serveOutput), 'loopback-only'), 'atum serve accepted a public bind.');
 
     $deployment = new AtumRemoteDeployment($paths['transaction']);
+    ob_start();
     $result = $deployment->install([
         'target' => $temporary . '/usr/share/atum', 'state-dir' => $paths['state'], 'config-dir' => $paths['config'],
         'listen-address' => '0.0.0.0', 'listen-port' => '8443', 'web-server' => 'nginx',
@@ -48,9 +49,12 @@ try {
         'web-config-test-binary' => $service, 'web-config-test-argument' => '-t',
         'start-web-service' => '1',
         'start-fpm-service' => '1',
+        'verbose' => '1',
         'service-command' => $service, 'openssl' => '/usr/bin/openssl',
     ]);
+    $verboseOutput = (string) ob_get_clean();
     expect(($result['web_server'] ?? '') === 'nginx', 'Remote deployment did not report Nginx.');
+    expect(str_contains($verboseOutput, '$ ') && str_contains($verboseOutput, 'start'), 'Verbose remote deployment did not expose underlying validation/service commands.');
     $nginx = (string) file_get_contents($paths['host'] . '/atum-nginx.conf');
     $pool = (string) file_get_contents($paths['host'] . '/atum-fpm.conf');
     expect(str_contains($nginx, 'ssl') && !preg_match('/(^|\s)listen\s+[^;]+(?<!ssl);/m', $nginx), 'Generated Nginx configuration permits plain HTTP.');

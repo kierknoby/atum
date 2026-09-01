@@ -129,6 +129,8 @@ If the file changed after Atum wrote it, uninstall must stop and report the conf
 
 The installer snapshots package state before installing missing Atum dependencies.
 
+Normal installation presents dependencies as required capabilities and suppresses successful package-manager chatter. `--verbose` restores the detailed pre-flight report and streams package-manager output plus remote configuration-validation and service commands/output. If a non-verbose package transaction fails, Atum replays that transaction's complete captured output before its own actionable error; diagnostics are not discarded. `--yes` approves the same package decision without requiring a terminal.
+
 Only packages that were absent before Atum and added by the dependency transaction are candidates for removal.
 
 Dependency removal is conservative:
@@ -144,6 +146,8 @@ Clean Atum removal is more important than removing a shared runtime package unsa
 Atum does not open firewall ports automatically.
 
 The built-in server remains loopback-only. Explicit remote mode uses HTTPS on the selected host address/port through a supported Nginx or Apache and dedicated PHP-FPM pool. Existing supported web servers are reused; when neither exists, Nginx is the default. The installer can offer native APT packages for the selected web server, PHP-FPM and OpenSSL. It can offer native PHP dependencies on DNF/YUM, but fails closed before installing a new web server there; the administrator must install Nginx or Apache and rerun Atum. It adds no third-party repositories, `--no-deps` prevents package installation, and `--yes` does not bypass this safety boundary. Atum never changes host or DigitalOcean firewall rules. The operator must permit the port manually and should restrict it to a trusted administration source IP or CIDR.
+
+Successful remote-install output uses an explicit bind address directly. For wildcard binds it may display the current SSH server address or a single unambiguous non-loopback host address; otherwise it prints `https://<server-address>:PORT/`. IPv6 literals are bracketed. This is presentation of locally available information, not a claim of public reachability, and no external address-discovery service is used.
 
 When Atum introduces the selected web server on Debian/Ubuntu, it creates a temporary `policy-rc.d` only when no administrator policy already exists, preventing package-maintainer service starts while dependencies are installed. The temporary policy is journalled and removed on success, failure, and interrupted-install recovery. Atum then disables only the unmodified package default enablement link (`nginx` `sites-enabled/default` or Apache `sites-enabled/000-default.conf`), records its target in the ledger, validates the Atum PHP-FPM and HTTPS configurations, and only then starts the new web server. Uninstall restores that link only if its path remains unclaimed. For an existing selected web server, this safety mechanism does not change its default configuration or prior service state; normal remote deployment still adds the Atum-owned vhost and reloads that service after native validation.
 

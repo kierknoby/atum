@@ -4,6 +4,7 @@ SECURITY.md
 composer.json
 install
 install.php
+installer/presentation.sh
 uninstall
 uninstall.php
 bin/atum

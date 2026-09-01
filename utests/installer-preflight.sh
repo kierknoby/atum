@@ -67,7 +67,9 @@ run_case() {
     case "$expected" in
         pass)
             [ "$status" -eq 0 ] || { cat "$case_root/output" >&2; exit 1; }
-            grep -q 'remote development configuration requested' "$case_root/output"
+            grep -q '^Atum GUI installation pre-flight$' "$case_root/output"
+            ! grep -q '^\[[1-6]/6\]' "$case_root/output"
+            grep -q 'Remote HTTPS     :' "$case_root/output"
             grep -q "Web server       : $expected_server (detected; reused)" "$case_root/output"
             ;;
         ambiguous)
@@ -76,6 +78,8 @@ run_case() {
             ;;
         missing)
             [ "$status" -ne 0 ] || { echo "$name unexpectedly passed" >&2; exit 1; }
+            grep -q '^Atum GUI installation pre-flight$' "$case_root/output"
+            ! grep -q '^\[[1-6]/6\]' "$case_root/output"
             if [ "$missing" = php ]; then
                 grep -q 'PHP              : missing' "$case_root/output"
                 if [ "$scope" = remote ] && [ "$servers" = none ]; then
@@ -83,7 +87,7 @@ run_case() {
                     [ "$(grep -c -- '^- PHP 8.2 or newer CLI$' "$case_root/output")" -eq 1 ]
                     grep -q -- '- Nginx' "$case_root/output"
                     grep -q -- '- PHP-FPM cannot be evaluated until PHP is installed' "$case_root/output"
-                    grep -q 'selected for provisioning; not installed' "$case_root/output"
+                    grep -q 'selected; not installed' "$case_root/output"
                     ! grep -q -- '^- 8.2$' "$case_root/output"
                 fi
             else

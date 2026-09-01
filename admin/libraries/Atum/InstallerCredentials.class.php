@@ -48,7 +48,7 @@ final class AtumInstallerCredentials
             }
 
             while (true) {
-                $password = self::readSecret('Administrator password: ');
+                $password = self::readSecret('Password: ');
                 try {
                     self::validatePassword($password);
                 } catch (InvalidArgumentException $exception) {
@@ -83,7 +83,7 @@ final class AtumInstallerCredentials
             throw new RuntimeException('A TTY or ATUM_ADMIN_USER is required to create the first administrator.');
         }
         try {
-            if (fwrite($tty, 'Administrator username [admin]: ') === false) {
+            if (fwrite($tty, 'Username [admin]: ') === false) {
                 throw new RuntimeException('Unable to prompt for administrator credentials.');
             }
             $line = fgets($tty);
@@ -155,6 +155,6 @@ final class AtumInstallerCredentials
 
     private static function reject(string $problem): void
     {
-        fwrite(STDERR, "Administrator credentials rejected: {$problem}\n");
+        fwrite(STDERR, "{$problem}\nTry again.\n");
     }
 }

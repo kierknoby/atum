@@ -77,7 +77,40 @@ sudo ./install --check --remote
 sudo ./install --development --remote
 ```
 
-`sudo ./install --check --remote` validates the baseline and remote Linux, systemd, web-server, PHP-FPM, OpenSSL and listen-address requirements. It does not require `--development` and makes no changes. `sudo ./install --development --remote` performs the installation and configures remote HTTPS access.
+`sudo ./install --check --remote` is the detailed engineering view: it reports the operating system, package/service managers, runtime, web server, Kamailio configuration, paths, bind address and missing requirements. It does not require `--development` and makes no changes. `sudo ./install --development --remote` uses a shorter operator-facing summary and staged progress while performing the installation.
+
+Use `--yes` for deterministic non-interactive package approval. Add `--verbose` when diagnosing an install to retain the detailed pre-flight view and stream the underlying package-manager and remote validation/service output:
+
+```sh
+sudo ./install --development --remote --yes
+sudo ./install --development --remote --verbose
+```
+
+A normal remote run is deliberately concise and follows completed installer boundaries rather than percentages or animation:
+
+```text
+Atum 0.1 Development Preview
+NOT SUITABLE FOR PRODUCTION
+
+Kamailio 6.0.1 detected
+Configuration: /etc/kamailio/kamailio.cfg
+Web server: Nginx (will be installed)
+HTTPS bind: 0.0.0.0:8443
+
+Preparing remote Atum installation
+
+[1/6] Checking host
+      done
+[2/6] Installing system dependencies
+...
+[6/6] Creating initial administrator
+
+Username [admin]:
+Password:
+Confirm password:
+```
+
+Detected versions and selected/reused components reflect the actual host. Package decisions are described as capabilities; exact distro package names and underlying command output remain available with `--verbose`. No cursor control or colour support is required.
 
 The checkout is only the installation source. The installer does not modify it and copies only files listed in `install-files.txt`. Git metadata, tests, untracked files and other checkout content are not installed.
 
@@ -105,13 +138,13 @@ sudo ./install --development --remote
 
 It remains **NOT SUITABLE FOR PRODUCTION.** The installer reuses an existing supported Nginx or Apache installation; when neither exists, it selects Nginx by default and can offer to install it from the host's normal package repositories. It creates a dedicated `atum` PHP-FPM pool and exposes only Atum's `public/` directory over HTTPS. When Atum owns the TLS setup, it generates a self-signed development certificate. The default listen port is 8443. It does not modify firewall rules.
 
-After installation, open:
+Normal installation output reports the verified bind and renders the safest useful URL available. For an explicit address it uses that address. For a wildcard bind it prefers the server address from the current SSH connection, otherwise it uses a single unambiguous non-loopback host address. If no address is clearly preferable it prints a neutral placeholder:
 
 ```text
-https://PUBLIC_IP:8443/
+https://<server-address>:8443/
 ```
 
-The browser will warn because the generated certificate is self-signed.
+IPv6 literals are bracketed correctly. The installer does not use an external address-discovery service and does not claim that a host address is publicly reachable. The browser will warn because the generated development certificate is self-signed.
 
 Atum does not change firewall rules and does not alter Kamailio merely by being installed. On a DigitalOcean Droplet, allow the selected Atum port in the DigitalOcean Cloud Firewall or host firewall only from the administrator's trusted public IP or CIDR. DigitalOcean is not required, and Atum does not use its API.
 
@@ -130,6 +163,7 @@ Available installer options:
 --check                     pre-flight only; make no changes
 --no-deps                   do not install missing operating-system packages
 --yes, -y                   answer yes to dependency package prompts
+--verbose                   show detailed pre-flight, package and service output
 --prefix=/path              override the application path
 --kamailio-config=/path     use an explicit Kamailio configuration
 --allow-no-kamailio         development install without Kamailio
@@ -399,6 +433,7 @@ find . -type f -name '*.php' -print0 | xargs -0 -n1 php -l
 php utests/run.php
 php utests/remote-deployment.php
 sh utests/installer-preflight.sh
+sh utests/installer-presentation.sh
 sudo env "PATH=$PATH" sh utests/web-server-provisioning.sh
 sh utests/installer-credentials.sh
 sh utests/http.sh
