@@ -146,6 +146,8 @@ fi
 WEB_SERVER_WAS_PRESENT=0
 if [ "$WEB_SERVER" = nginx ] && [ "$NGINX_DETECTED" -eq 1 ]; then WEB_SERVER_WAS_PRESENT=1; fi
 if [ "$WEB_SERVER" = apache ] && [ "$APACHE_DETECTED" -eq 1 ]; then WEB_SERVER_WAS_PRESENT=1; fi
+FPM_WAS_PRESENT=0
+for candidate in php-fpm php-fpm8.2 php-fpm8.3 php-fpm8.4 php-fpm8.5; do command -v "$candidate" >/dev/null 2>&1 && FPM_WAS_PRESENT=1; done
 WEB_SERVER_LABEL=$WEB_SERVER
 if [ "$REMOTE_MODE" -eq 1 ] && [ "$WEB_SERVER" != none ]; then
     if [ "$WEB_SERVER_WAS_PRESENT" -eq 1 ]; then WEB_SERVER_LABEL="$WEB_SERVER (detected; reused)"
@@ -387,25 +389,23 @@ recover_transaction() {
             fi
         fi
     done
-    for record in "$TRANSACTION_DIR"/reload-service-*; do
-        [ -f "$record" ] || continue
-        old_service=$(sed -n '1p' "$record")
-        case "$old_service" in *[!A-Za-z0-9@_.-]*|'') fail "Interrupted-install journal contains an invalid service name." ;; esac
-        "$SERVICE_COMMAND" reload "$old_service" >/dev/null 2>&1 || fail "Unable to reload $old_service while recovering interrupted remote installation."
-    done
     for record in "$TRANSACTION_DIR"/package-service-mask-*; do
         [ -f "$record" ] || continue
         old_service=$(sed -n '1p' "$record")
         case "$old_service" in *[!A-Za-z0-9@_.-]*|'') fail "Interrupted-install journal contains an invalid service mask." ;; esac
         "$SERVICE_COMMAND" unmask "$old_service" >/dev/null 2>&1 || fail "Unable to remove a temporary web-server service mask during recovery."
     done
-    for record in "$TRANSACTION_DIR"/web-default-disabled-*; do
+    for record in "$TRANSACTION_DIR"/package-enabled-unit-*; do
         [ -f "$record" ] || continue
-        old_path=$(sed -n '1p' "$record"); old_target=$(sed -n '2p' "$record")
-        case "$old_path:$old_target" in /*:../sites-available/default|/*:/etc/nginx/sites-available/default|/*:../sites-available/000-default.conf|/*:/etc/apache2/sites-available/000-default.conf) ;; *) fail "Interrupted-install journal contains an unsafe default-site record." ;; esac
-        if [ -L "$old_path" ] && [ "$(readlink "$old_path")" = "$old_target" ]; then continue; fi
-        [ ! -e "$old_path" ] && [ ! -L "$old_path" ] || fail "Default site changed after interrupted installation; refusing to restore it: $old_path"
-        ln -s "$old_target" "$old_path" || fail "Unable to restore the default web-server site during recovery."
+        old_unit=$(sed -n '1p' "$record")
+        case "$old_unit" in *[!A-Za-z0-9@_.-]*|'') fail "Interrupted-install journal contains an invalid enabled unit." ;; esac
+        "$SERVICE_COMMAND" disable --now "$old_unit" >/dev/null 2>&1 || fail "Unable to disable package-enabled unit during recovery: $old_unit"
+    done
+    for record in "$TRANSACTION_DIR"/reload-service-*; do
+        [ -f "$record" ] || continue
+        old_service=$(sed -n '1p' "$record")
+        case "$old_service" in *[!A-Za-z0-9@_.-]*|'') fail "Interrupted-install journal contains an invalid service name." ;; esac
+        "$SERVICE_COMMAND" reload "$old_service" >/dev/null 2>&1 || true
     done
     for key in application-stage application state configuration; do
         [ -f "$TRANSACTION_DIR/intended-$key" ] || [ -f "$TRANSACTION_DIR/created-$key" ] || continue
@@ -533,13 +533,20 @@ snapshot_packages() {
 
 BEFORE=$(mktemp)
 AFTER=$(mktemp)
+ENABLED_BEFORE=$(mktemp)
+ENABLED_AFTER=$(mktemp)
+snapshot_enabled_units() { "$SERVICE_COMMAND" list-unit-files --state=enabled --no-legend --no-pager 2>/dev/null | awk '{print $1}' | sort -u; }
 rollback_install() {
     status=$?
     trap - EXIT HUP INT TERM
-    rm -f "$BEFORE" "$AFTER"
+    rm -f "$BEFORE" "$AFTER" "$ENABLED_BEFORE" "$ENABLED_AFTER"
     if [ "$status" -ne 0 ] && [ "$INSTALL_COMMITTED" -eq 0 ]; then
         remove_package_start_suppression || true
-        restore_default_site || true
+        for record in "$TRANSACTION_DIR"/package-enabled-unit-*; do
+            [ -f "$record" ] || continue
+            unit=$(sed -n '1p' "$record")
+            "$SERVICE_COMMAND" disable --now "$unit" >/dev/null 2>&1 || true
+        done
         [ "$USER_CREATED" -eq 1 ] && command -v userdel >/dev/null 2>&1 && userdel atum >/dev/null 2>&1 || true
         [ "$GROUP_CREATED" -eq 1 ] && command -v groupdel >/dev/null 2>&1 && groupdel atum >/dev/null 2>&1 || true
         [ -z "$PACKAGES_ADDED" ] || say "Retaining packages after failed installation; safe reverse-dependency removal is deferred to recovery: $PACKAGES_ADDED"
@@ -548,6 +555,7 @@ rollback_install() {
 }
 trap rollback_install EXIT HUP INT TERM
 snapshot_packages > "$BEFORE"
+snapshot_enabled_units > "$ENABLED_BEFORE"
 
 refresh_packages_added() {
     snapshot_packages > "$AFTER"
@@ -556,6 +564,31 @@ refresh_packages_added() {
     printf '%s\n' $PACKAGES_ADDED > "$TRANSACTION_DIR/packages-added.tmp"
     chmod 0600 "$TRANSACTION_DIR/packages-added.tmp"
     mv "$TRANSACTION_DIR/packages-added.tmp" "$TRANSACTION_DIR/packages-added"
+}
+
+record_newly_enabled_units() {
+    snapshot_enabled_units > "$ENABLED_AFTER"
+    unit_number=$(find "$TRANSACTION_DIR" -maxdepth 1 -name 'package-enabled-unit-*' -type f | wc -l)
+    comm -13 "$ENABLED_BEFORE" "$ENABLED_AFTER" > "$TRANSACTION_DIR/.new-enabled-units"
+    while IFS= read -r unit; do
+        [ -n "$unit" ] || continue
+        unit_number=$((unit_number + 1))
+        printf '%s\n' "$unit" > "$TRANSACTION_DIR/package-enabled-unit-$unit_number"
+        chmod 0600 "$TRANSACTION_DIR/package-enabled-unit-$unit_number"
+    done < "$TRANSACTION_DIR/.new-enabled-units"
+    rm -f "$TRANSACTION_DIR/.new-enabled-units"
+}
+
+package_is_installed() {
+    case "$PKG_MANAGER" in
+        apt-get) [ "$(dpkg-query -W -f='${db:Status-Status}' "$1" 2>/dev/null || true)" = installed ] ;;
+        dnf|yum) rpm -q "$1" >/dev/null 2>&1 ;;
+        *) return 1 ;;
+    esac
+}
+
+missing_packages() {
+    for package in "$@"; do package_is_installed "$package" || printf '%s\n' "$package"; done
 }
 
 confirm_packages() {
@@ -578,7 +611,6 @@ install_packages() {
     fi
     case "$PKG_MANAGER" in
         apt-get)
-            apt-get update
             DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@" || { remove_package_start_suppression || true; refresh_packages_added; return 1; }
             ;;
         dnf|yum)
@@ -587,6 +619,7 @@ install_packages() {
         *) return 1 ;;
     esac
     refresh_packages_added
+    record_newly_enabled_units
     if [ "$package_contains_web_server" -eq 1 ]; then
         disable_new_web_server_default_site
         remove_package_start_suppression
@@ -605,18 +638,18 @@ if [ "$PHP_OK" -ne 1 ]; then
     fi
     case "$PKG_MANAGER" in
         apt-get)
-            packages="php-cli php-common"
+            packages=$(missing_packages php-cli php-common | tr '\n' ' ')
             if [ "$REMOTE_MODE" -eq 1 ]; then
-                packages="$packages php-fpm php-sqlite3 openssl"
-                [ "$WEB_SERVER" = nginx ] && packages="$packages nginx" || packages="$packages apache2"
+                packages="$packages $(missing_packages php-fpm php-sqlite3 openssl | tr '\n' ' ')"
+                [ "$WEB_SERVER" = nginx ] && packages="$packages $(missing_packages nginx | tr '\n' ' ')" || packages="$packages $(missing_packages apache2 | tr '\n' ' ')"
             fi
             install_packages $packages || fail "Install PHP >= 8.2 and rerun."
             ;;
         dnf|yum)
-            packages="php-cli php-common"
+            packages=$(missing_packages php-cli php-common | tr '\n' ' ')
             if [ "$REMOTE_MODE" -eq 1 ]; then
-                packages="$packages php-fpm php-pdo openssl"
-                [ "$WEB_SERVER" = nginx ] && packages="$packages nginx" || packages="$packages httpd"
+                packages="$packages $(missing_packages php-fpm php-pdo openssl | tr '\n' ' ')"
+                [ "$WEB_SERVER" = nginx ] && packages="$packages $(missing_packages nginx | tr '\n' ' ')" || packages="$packages $(missing_packages httpd | tr '\n' ' ')"
             fi
             install_packages $packages || fail "Install PHP >= 8.2 and rerun."
             ;;
@@ -645,15 +678,15 @@ done
 
 if [ "$REMOTE_MODE" -eq 1 ]; then
     remote_packages=""
-    command -v openssl >/dev/null 2>&1 || remote_packages="$remote_packages openssl"
+    command -v openssl >/dev/null 2>&1 || remote_packages="$remote_packages $(missing_packages openssl | tr '\n' ' ')"
     if [ "$WEB_SERVER" = nginx ]; then
-        command -v nginx >/dev/null 2>&1 || remote_packages="$remote_packages nginx"
+        command -v nginx >/dev/null 2>&1 || remote_packages="$remote_packages $(missing_packages nginx | tr '\n' ' ')"
     else
-        command -v apache2 >/dev/null 2>&1 || command -v httpd >/dev/null 2>&1 || remote_packages="$remote_packages $([ "$PKG_MANAGER" = apt-get ] && printf '%s' apache2 || printf '%s' httpd)"
+        command -v apache2 >/dev/null 2>&1 || command -v httpd >/dev/null 2>&1 || remote_packages="$remote_packages $(missing_packages "$WEB_SERVER_PACKAGE" | tr '\n' ' ')"
     fi
     remote_requirements
     case "$REMOTE_MISSING" in *PHP-FPM*|*matching\ PHP-FPM*)
-        case "$PKG_MANAGER" in apt-get) remote_packages="$remote_packages php-fpm" ;; dnf|yum) remote_packages="$remote_packages php-fpm php-pdo" ;; esac ;;
+        case "$PKG_MANAGER" in apt-get) remote_packages="$remote_packages $(missing_packages php-fpm | tr '\n' ' ')" ;; dnf|yum) remote_packages="$remote_packages $(missing_packages php-fpm php-pdo | tr '\n' ' ')" ;; esac ;;
     esac
     [ -z "$remote_packages" ] || install_packages $remote_packages || fail "Remote development dependencies are missing; rerun without --no-deps to install native packages."
     remote_requirements
@@ -705,6 +738,7 @@ ATUM_INSTALL_BOOTSTRAPPED=1 php "$SOURCE_DIR/install.php" \
     --web-config-test-binary="$WEB_CONFIG_TEST_BINARY" \
     --web-config-test-argument="$WEB_CONFIG_TEST_ARGUMENT" \
     --start-web-service="$([ "$WEB_SERVER_WAS_PRESENT" -eq 0 ] && printf '%s' 1 || printf '%s' 0)" \
+    --start-fpm-service="$([ "$FPM_WAS_PRESENT" -eq 0 ] && printf '%s' 1 || printf '%s' 0)" \
     --service-command="$SERVICE_COMMAND" \
     --openssl="$(command -v openssl 2>/dev/null || true)"
 

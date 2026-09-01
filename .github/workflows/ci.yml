@@ -35,6 +35,11 @@ jobs:
       - run: php utests/run.php
       - run: php utests/remote-deployment.php
       - run: sh utests/installer-preflight.sh
+      - run: sudo env "PATH=$PATH" sh utests/web-server-provisioning.sh
+      - if: ${{ matrix.php == '8.3' }}
+        run: sudo apt-get update && sudo apt-get install -y libio-pty-perl
+      - if: ${{ matrix.php == '8.3' }}
+        run: sh utests/installer-credentials.sh
       - run: sh utests/http.sh
       - run: ./install --check --allow-no-kamailio
       - if: ${{ matrix.php == '8.3' }}

@@ -52,6 +52,7 @@ $options = [
     'web-config-test-binary' => '',
     'web-config-test-argument' => '',
     'start-web-service' => '0',
+    'start-fpm-service' => '0',
     'service-command' => 'systemctl',
     'openssl' => 'openssl',
 ];
@@ -145,49 +146,6 @@ function copyTree(string $source, string $target): void
     }
 }
 
-function readSecret(string $prompt): string
-{
-    $file = getenv('ATUM_ADMIN_PASSWORD_FILE');
-    if ($file !== false && $file !== '') {
-        $value = @file_get_contents($file);
-        if ($value === false) {
-            throw new RuntimeException('Unable to read ATUM_ADMIN_PASSWORD_FILE.');
-        }
-        return rtrim($value, "\r\n");
-    }
-    $tty = @fopen('/dev/tty', 'r+');
-    if ($tty === false) {
-        throw new RuntimeException('A TTY or ATUM_ADMIN_PASSWORD_FILE is required to create the first administrator.');
-    }
-    fwrite($tty, $prompt);
-    $state = trim((string) shell_exec('stty -g < /dev/tty'));
-    shell_exec('stty -echo < /dev/tty');
-    try {
-        $value = rtrim((string) fgets($tty), "\r\n");
-    } finally {
-        shell_exec('stty ' . escapeshellarg($state !== '' ? $state : 'echo') . ' < /dev/tty');
-        fwrite($tty, "\n");
-        fclose($tty);
-    }
-    return $value;
-}
-
-function prompt(string $prompt, string $default): string
-{
-    $preset = getenv('ATUM_ADMIN_USER');
-    if ($preset !== false && $preset !== '') {
-        return $preset;
-    }
-    $tty = @fopen('/dev/tty', 'r+');
-    if ($tty === false) {
-        return $default;
-    }
-    fwrite($tty, $prompt . ' [' . $default . ']: ');
-    $value = trim((string) fgets($tty));
-    fclose($tty);
-    return $value !== '' ? $value : $default;
-}
-
 function chmodTreeOwner(string $path, string $user, string $group): void
 {
     @chown($path, $user);
@@ -243,23 +201,6 @@ try {
         throw new RuntimeException('Unable to write Atum configuration.');
     }
     @chmod($configDir . '/atum.conf', 0640);
-
-    // Initialise Atum state and create the first local administrator against
-    // the staged application. The application is not committed until this succeeds.
-    putenv('ATUM_STATE_DIR=' . $stateDir);
-    putenv('KAMAILIO_CONFIG=' . $kamailioConfig);
-    require_once $stage . '/admin/bootstrap.php';
-    $atum = Atum::create();
-    $atum->Modules->installBundled(true);
-    $username = prompt('Administrator username', 'admin');
-    $password = readSecret('Administrator password: ');
-    if (getenv('ATUM_ADMIN_PASSWORD_FILE') === false) {
-        $confirm = readSecret('Confirm password: ');
-        if (!hash_equals($password, $confirm)) {
-            throw new RuntimeException('Administrator passwords did not match.');
-        }
-    }
-    $atum->Auth->createUser($username, $password, 'admin');
 
     journalWrite($transactionDir, 'intended-application', "1\n");
     if (!rename($stage, $target)) {
@@ -317,6 +258,7 @@ try {
             'web-config-test-binary' => $options['web-config-test-binary'],
             'web-config-test-argument' => $options['web-config-test-argument'],
             'start-web-service' => $options['start-web-service'],
+            'start-fpm-service' => $options['start-fpm-service'],
             'service-command' => $options['service-command'],
             'openssl' => $options['openssl'],
         ]);
@@ -330,6 +272,19 @@ try {
             $disabledDefaultSites[] = ['path' => $lines[0], 'target' => $lines[1]];
         }
     }
+
+    // Infrastructure is now validated; only now initialise application state and prompt.
+    putenv('ATUM_STATE_DIR=' . $stateDir);
+    putenv('KAMAILIO_CONFIG=' . $kamailioConfig);
+    require_once $target . '/admin/bootstrap.php';
+    require_once $target . '/admin/libraries/Atum/InstallerCredentials.class.php';
+    $atum = Atum::create();
+    $atum->Modules->installBundled(true);
+    $username = AtumInstallerCredentials::createAdministrator(
+        static function (string $acceptedUsername, string $acceptedPassword) use ($atum): void {
+            $atum->Auth->createUser($acceptedUsername, $acceptedPassword, 'admin');
+        }
+    );
 
     $kamailioFiles = [];
     if ($kamailioConfig !== '' && is_readable($kamailioConfig)) {

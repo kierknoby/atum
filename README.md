@@ -399,6 +399,8 @@ find . -type f -name '*.php' -print0 | xargs -0 -n1 php -l
 php utests/run.php
 php utests/remote-deployment.php
 sh utests/installer-preflight.sh
+sudo env "PATH=$PATH" sh utests/web-server-provisioning.sh
+sh utests/installer-credentials.sh
 sh utests/http.sh
 ```
 
@@ -408,7 +410,9 @@ The root-required `utests/system-lifecycle.sh` suite creates and removes the sys
 sudo env "PATH=$PATH" sh utests/system-lifecycle.sh
 ```
 
-CI runs Composer validation, PHP and shell syntax checks, JavaScript syntax checks, SQLite-backed security/framework tests, remote pre-flight tests, HTTP boundary tests and the disposable Linux installer/uninstaller test. Linux exercises PHP 8.2, 8.3 and 8.4; macOS exercises PHP 8.3 portability. CI success is not equivalent to Kamailio integration or production certification.
+The credential suite uses an isolated application-level fixture. It exercises the real terminal input path without creating a system account or global CLI links.
+
+CI runs Composer validation, PHP and shell syntax checks, JavaScript syntax checks, SQLite-backed security/framework tests, remote pre-flight and web-provisioning tests, isolated credential terminal tests, HTTP boundary tests and the disposable Linux installer/uninstaller test. Linux exercises PHP 8.2, 8.3 and 8.4; macOS exercises PHP 8.3 portability. CI success is not equivalent to Kamailio integration or production certification.
 
 ## Current Limitations
 

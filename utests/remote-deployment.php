@@ -47,6 +47,7 @@ try {
         'fpm-service' => 'php8.3-fpm', 'fpm-binary' => $service,
         'web-config-test-binary' => $service, 'web-config-test-argument' => '-t',
         'start-web-service' => '1',
+        'start-fpm-service' => '1',
         'service-command' => $service, 'openssl' => '/usr/bin/openssl',
     ]);
     expect(($result['web_server'] ?? '') === 'nginx', 'Remote deployment did not report Nginx.');
@@ -64,7 +65,7 @@ try {
     expect(count(glob($paths['transaction'] . '/host-created-*') ?: []) === 4, 'Remote artefacts were not provisionally journalled.');
     $commands = (string) file_get_contents($temporary . '/services.log');
     expect(substr_count($commands, '-t') >= 2, 'Native-style PHP-FPM and Nginx configuration validation did not run.');
-    expect(str_contains($commands, 'start nginx') && str_contains($commands, 'reload php8.3-fpm'), 'New web server was not started only after validation.');
+    expect(str_contains($commands, 'start nginx') && str_contains($commands, 'start php8.3-fpm') && !str_contains($commands, 'reload php8.3-fpm'), 'New FPM and web services were not started only after validation.');
     expect(!preg_match('/\b(ufw|firewall-cmd|iptables|nft)\b/', $commands), 'A firewall command was executed.');
 
     // Changed administrator-owned host configuration must survive rollback.
@@ -77,6 +78,7 @@ try {
     foreach (['transaction', 'config', 'state', 'available', 'enabled', 'fpm'] as $directory) {
         mkdir($apacheRoot . '/' . $directory, 0700, true);
     }
+    $apacheLogOffset = filesize($temporary . '/services.log');
     $apacheDeployment = new AtumRemoteDeployment($apacheRoot . '/transaction');
     $apacheResult = $apacheDeployment->install([
         'target' => $apacheRoot . '/application', 'state-dir' => $apacheRoot . '/state', 'config-dir' => $apacheRoot . '/config',
@@ -85,12 +87,15 @@ try {
         'web-service' => 'apache2', 'web-group' => 'www-data', 'fpm-config' => $apacheRoot . '/fpm/atum.conf',
         'fpm-socket' => '/run/php/atum-fpm.sock', 'fpm-service' => 'php8.3-fpm',
         'fpm-binary' => $service, 'web-config-test-binary' => $service, 'web-config-test-argument' => 'configtest',
+        'start-fpm-service' => '0',
         'service-command' => $service, 'openssl' => '/usr/bin/openssl',
     ]);
     $apache = (string) file_get_contents($apacheRoot . '/available/atum.conf');
     expect(($apacheResult['web_server'] ?? '') === 'apache' && str_contains($apache, '<VirtualHost [::]:9443>'), 'Apache IPv6 HTTPS vhost was not generated correctly.');
     expect(str_contains($apache, 'DocumentRoot ' . $apacheRoot . '/application/public'), 'Apache document root is not public/.');
     expect(is_link($apacheRoot . '/enabled/atum.conf') && readlink($apacheRoot . '/enabled/atum.conf') === $apacheRoot . '/available/atum.conf', 'Apache enablement symlink is incorrect.');
+    $apacheCommands = substr((string) file_get_contents($temporary . '/services.log'), $apacheLogOffset);
+    expect(str_contains($apacheCommands, 'reload php8.3-fpm') && !str_contains($apacheCommands, 'start php8.3-fpm'), 'Pre-existing PHP-FPM was not reloaded.');
     $apacheDeployment->rollback($service);
     expect(!is_link($apacheRoot . '/enabled/atum.conf') && !is_file($apacheRoot . '/available/atum.conf'), 'Apache rollback left Atum integration behind.');
 

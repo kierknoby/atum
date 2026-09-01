@@ -187,6 +187,21 @@ PATH="$TEST_ROOT/bin:$PATH" php "$ROOT/uninstall.php" --config-dir="$ATUM_CONFIG
 [ -f "$TEST_ROOT/host/nginx/operator.conf" ]
 ! grep -Eq '(^| )(ufw|firewall-cmd|iptables|nft)( |$)' "$TEST_ROOT/service-actions"
 
+# A default-site link disabled by a successful new-server installation is an
+# owned ledger change and is restored only during successful uninstall.
+default_restore_root="$TEST_ROOT/default-site-restore"
+mkdir -p "$default_restore_root/application" "$default_restore_root/state" "$default_restore_root/config" "$default_restore_root/nginx/sites-available" "$default_restore_root/nginx/sites-enabled"
+default_restore_id=11111111111111111111111111111111
+for directory in application state config; do printf '%s\n' "$default_restore_id" > "$default_restore_root/$directory/.atum-install-id"; done
+printf '%s\n' 'package default site' > "$default_restore_root/nginx/sites-available/default"
+cat > "$default_restore_root/config/install-ledger.json" <<EOF
+{"schema":1,"install_id":"$default_restore_id","package_manager":"apt-get","packages_added":[],"paths":{"application":"$default_restore_root/application","state":"$default_restore_root/state","configuration":"$default_restore_root/config"},"system_account":{"user_created":false,"group_created":false},"kamailio":{"installer_modified":false},"host_integrations":{"services":[],"created_files":[],"modified_files":[],"disabled_default_sites":[{"path":"$default_restore_root/nginx/sites-enabled/default","target":"../sites-available/default"}],"reload_services":[]},"remote_development":null}
+EOF
+chmod 0600 "$default_restore_root/config/install-ledger.json"
+php "$ROOT/uninstall.php" --config-dir="$default_restore_root/config" --yes --keep-dependencies >/dev/null
+[ -L "$default_restore_root/nginx/sites-enabled/default" ]
+[ "$(readlink "$default_restore_root/nginx/sites-enabled/default")" = ../sites-available/default ]
+
 # Install from a genuine Git work tree containing repository metadata and
 # arbitrary untracked files. The manifest alone defines the installed files.
 CHECKOUT="$TEST_ROOT/github-checkout"

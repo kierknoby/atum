@@ -30,7 +30,15 @@ esac
 EOF
     cat > "$case_root/bin/dpkg-query" <<EOF
 #!/bin/sh
+    case "\$*" in
+        *db:Status-Status*)
+            for argument in "\$@"; do package=\$argument; done
+            grep -qx "\$package" "$case_root/packages/installed" 2>/dev/null && echo installed
+            ;;
+        *)
 cat "$case_root/packages/installed" 2>/dev/null || true
+            ;;
+    esac
 EOF
     cat > "$case_root/bin/apt-get" <<EOF
 #!/bin/sh
@@ -40,6 +48,7 @@ for package in "\$@"; do
     case "\$package" in
         nginx)
             printf '%s\n' nginx >> "$case_root/packages/installed"
+            printf '%s\n' nginx.service >> "$case_root/units-enabled"
             printf '%s\n' '#!/bin/sh' 'exit 0' > "$case_root/bin/nginx"; chmod 0755 "$case_root/bin/nginx"
             ln -s ../sites-available/default "$case_root/nginx/sites-enabled/default"
             ;;
@@ -50,6 +59,7 @@ for package in "\$@"; do
             ;;
         php-fpm)
             printf '%s\n' php-fpm >> "$case_root/packages/installed"
+            printf '%s\n' php8.4-fpm.service phpsessionclean.timer >> "$case_root/units-enabled"
             printf '%s\n' '#!/bin/sh' 'echo "PHP $fpm_version.0 (fpm-fcgi)"' > "$case_root/bin/php-fpm8.4"; chmod 0755 "$case_root/bin/php-fpm8.4"
             ;;
         php-*) printf '%s\n' "\$package" >> "$case_root/packages/installed" ;;
@@ -61,6 +71,16 @@ EOF
     cat > "$case_root/bin/systemctl" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >> "$case_root/services.log"
+    case "\$1" in
+        list-unit-files) cat "$case_root/units-enabled" 2>/dev/null || true ;;
+        disable)
+            shift
+            [ "\$1" = --now ] && shift
+            grep -vx "\$1" "$case_root/units-enabled" > "$case_root/units-enabled.tmp" 2>/dev/null || true
+            mv "$case_root/units-enabled.tmp" "$case_root/units-enabled"
+            ;;
+        is-active|start|reload|unmask|mask) exit 0 ;;
+    esac
 EOF
     printf '%s\n' '#!/bin/sh' '[ "$1" = -u ] && { echo 0; exit 0; }' 'exit 1' > "$case_root/bin/id"
     printf '%s\n' '#!/bin/sh' 'exit 1' > "$case_root/bin/getent"
@@ -106,6 +126,11 @@ grep -q nginx "$nginx_case/apt.log"
 ! [ -e "$nginx_case/policy-rc.d" ]
 ! [ -L "$nginx_case/nginx/sites-enabled/default" ]
 grep -q -- '--packages-added=.*nginx' "$nginx_case/php-arguments"
+
+installed_dependency_case=$(make_case installed-fpm nginx no)
+printf '%s\n' php-fpm > "$installed_dependency_case/packages/installed"
+if run_install "$installed_dependency_case" --yes; then echo 'fixture unexpectedly completed without PHP-FPM binary' >&2; exit 1; fi
+! grep -qx php-fpm "$installed_dependency_case/apt.log"
 
 apache_case=$(make_case apache-new apache no)
 run_install "$apache_case" --yes --web-server=apache
@@ -157,5 +182,8 @@ if run_install "$failure_case" --yes; then echo 'default-site removal failure wa
 grep -q 'Unable to disable the package default web-server site' "$failure_case/output"
 ! [ -e "$failure_case/policy-rc.d" ]
 [ -L "$failure_case/nginx/sites-enabled/default" ]
+grep -q '^disable --now nginx.service$' "$failure_case/services.log"
+grep -q '^disable --now php8.4-fpm.service$' "$failure_case/services.log"
+grep -q '^disable --now phpsessionclean.timer$' "$failure_case/services.log"
 
 echo 'PASS  mocked web-server provisioning, default-site safety, reuse, accounting and FPM mismatch'

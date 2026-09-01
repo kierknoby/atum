@@ -15,6 +15,8 @@ find . -type f -name '*.php' -print0 | xargs -0 -n1 php -l
 php utests/run.php
 php utests/remote-deployment.php
 sh utests/installer-preflight.sh
+sudo env "PATH=$PATH" sh utests/web-server-provisioning.sh
+sh utests/installer-credentials.sh
 sh utests/http.sh
 ```
 
