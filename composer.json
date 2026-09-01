@@ -1,0 +1,13 @@
+{
+  "name": "freepbxuk/atum",
+  "description": "A modular web interface for discovering and managing an existing Kamailio installation.",
+  "type": "project",
+  "require": {
+    "php": ">=8.2",
+    "ext-pdo": "*",
+    "ext-pdo_sqlite": "*",
+    "ext-openssl": "*",
+    "ext-session": "*"
+  },
+  "license": "GPL-3.0-or-later"
+}

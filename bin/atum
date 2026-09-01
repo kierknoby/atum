@@ -1,0 +1,177 @@
+#!/usr/bin/env php
+<?php
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+declare(strict_types=1);
+
+require_once dirname(__DIR__) . '/admin/bootstrap.php';
+
+$Atum = Atum::create();
+$command = $argv[1] ?? 'help';
+
+function atumReadSecret(string $prompt): string
+{
+    $tty = @fopen('/dev/tty', 'r+');
+    if ($tty === false) {
+        throw new RuntimeException('A TTY is required to read a password safely.');
+    }
+    fwrite($tty, $prompt);
+    $stty = trim((string) shell_exec('stty -g < /dev/tty'));
+    shell_exec('stty -echo < /dev/tty');
+    try {
+        $value = rtrim((string) fgets($tty), "\r\n");
+    } finally {
+        if ($stty !== '') {
+            shell_exec('stty ' . escapeshellarg($stty) . ' < /dev/tty');
+        } else {
+            shell_exec('stty echo < /dev/tty');
+        }
+        fwrite($tty, "\n");
+        fclose($tty);
+    }
+    return $value;
+}
+
+switch ($command) {
+    case 'status':
+        echo "Atum GUI\n";
+        echo "Framework: " . Atum::Framework()->version() . "\n";
+        echo "Kamailio config: " . $Atum->Config->get('KAMAILIO_CONFIG') . "\n";
+        echo "Mode: " . ($Atum->Config->get('ATUM_READ_ONLY', true) ? 'read only' : 'managed') . "\n";
+        echo "Modules: " . count($Atum->Modules->getActiveModules()) . " enabled\n";
+        exit(0);
+
+    case 'system:check':
+        echo json_encode($Atum->System->check(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n";
+        exit(0);
+
+    case 'module:bootstrap':
+        $Atum->Modules->installBundled(true);
+        echo "Bundled Atum modules installed/upgraded.\n";
+        exit(0);
+
+    case 'module:list':
+        printf("%-16s %-10s %-10s %s\n", 'MODULE', 'VERSION', 'STATUS', 'NAME');
+        foreach ($Atum->Modules->getInfo() as $module) {
+            printf(
+                "%-16s %-10s %-10s %s\n",
+                $module['rawname'],
+                $module['version'],
+                !($module['installed'] ?? false) ? 'Not installed' : ($module['enabled'] ? 'Enabled' : 'Disabled'),
+                $module['name']
+            );
+        }
+        exit(0);
+
+    case 'module:install':
+        $module = strtolower((string) ($argv[2] ?? ''));
+        $Atum->Modules->install($module, true);
+        echo "Installed {$module}.\n";
+        exit(0);
+
+    case 'module:uninstall':
+        $module = strtolower((string) ($argv[2] ?? ''));
+        $Atum->Modules->uninstall($module, true);
+        echo "Uninstalled {$module}.\n";
+        exit(0);
+
+    case 'module:enable':
+    case 'module:disable':
+        $module = strtolower((string) ($argv[2] ?? ''));
+        if ($module === '') {
+            fwrite(STDERR, "Module rawname is required.\n");
+            exit(2);
+        }
+        // Local CLI administration bypasses browser authentication but still
+        // uses the same dependency-aware lifecycle implementation.
+        $Atum->Modules->setEnabled($module, $command === 'module:enable', true);
+        echo ucfirst(substr($command, 7)) . "d {$module}\n";
+        exit(0);
+
+    case 'user:create':
+        $username = (string) ($argv[2] ?? '');
+        $role = (string) ($argv[3] ?? 'admin');
+        if ($username === '') {
+            fwrite(STDERR, "Usage: atum user:create USERNAME [admin|viewer]\n");
+            exit(2);
+        }
+        $password = atumReadSecret('Password: ');
+        $confirm = atumReadSecret('Confirm password: ');
+        if (!hash_equals($password, $confirm)) {
+            fwrite(STDERR, "Passwords did not match.\n");
+            exit(1);
+        }
+        try {
+            $id = $Atum->Auth->createUser($username, $password, $role);
+            echo "Created Atum user {$username} (#{$id}).\n";
+            exit(0);
+        } catch (Throwable $e) {
+            fwrite(STDERR, "Unable to create user: {$e->getMessage()}\n");
+            exit(1);
+        }
+
+    case 'audit:list':
+        foreach ($Atum->Audit->recent((int) ($argv[2] ?? 50)) as $row) {
+            printf("%s %-8s %-24s %s\n", $row['created_at'], $row['outcome'], $row['action'], $row['detail'] ?? '');
+        }
+        exit(0);
+
+    case 'discovery:dependencies':
+        $path = $argv[2] ?? null;
+        try {
+            $report = Atum::Discovery()->scan($path);
+            echo implode(' ', $report['database_schemes'] ?? []) . "\n";
+            exit(0);
+        } catch (Throwable $e) {
+            fwrite(STDERR, "Dependency discovery failed: {$e->getMessage()}\n");
+            exit(1);
+        }
+
+    case 'discovery:scan':
+        $path = $argv[2] ?? null;
+        try {
+            echo json_encode(Atum::Discovery()->scan($path), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n";
+            exit(0);
+        } catch (Throwable $e) {
+            fwrite(STDERR, "Discovery failed: {$e->getMessage()}\n");
+            exit(1);
+        }
+
+    case 'serve':
+        $bind = $argv[2] ?? (string) $Atum->Config->get('ATUM_BIND', '127.0.0.1:8090');
+        if (str_starts_with($bind, '[') && preg_match('/^\[([^]]+)](?::\d+)?$/', $bind, $match)) {
+            $host = $match[1];
+        } else {
+            $separator = strrpos($bind, ':');
+            $host = $separator === false ? $bind : substr($bind, 0, $separator);
+        }
+        if (!in_array($host, ['127.0.0.1', 'localhost', '::1'], true)) {
+            fwrite(STDERR, "The development server is loopback-only by policy. Use an SSH tunnel for remote testing; v0.1 has no supported network deployment.\n");
+            exit(1);
+        }
+        echo "WARNING: Atum v0.1 is a development preview and NOT SUITABLE FOR PRODUCTION.\n";
+        echo "Atum GUI development server: http://{$bind}\n";
+        echo "Press Ctrl-C to stop.\n";
+        passthru(escapeshellarg(PHP_BINARY) . ' -S ' . escapeshellarg($bind) . ' -t ' . escapeshellarg(ATUM_ROOT . '/public'), $status);
+        exit($status);
+
+    case 'help':
+    default:
+        echo "Atum GUI CLI (v0.1 development preview - NOT SUITABLE FOR PRODUCTION)\n\n";
+        echo "Usage: bin/atum <command> [arguments]\n\n";
+        echo "Commands:\n";
+        echo "  status                          Show Atum status\n";
+        echo "  system:check                    Inspect OS, PHP, Kamailio and dependencies\n";
+        echo "  module:bootstrap                Install/upgrade bundled modules\n";
+        echo "  module:list                     List Atum modules\n";
+        echo "  module:install RAWNAME          Run module install lifecycle\n";
+        echo "  module:uninstall RAWNAME        Run module uninstall lifecycle\n";
+        echo "  module:enable RAWNAME           Enable an installed module\n";
+        echo "  module:disable RAWNAME          Disable an installed module\n";
+        echo "  user:create USER [ROLE]         Create a local Atum account\n";
+        echo "  audit:list [COUNT]              Show recent Atum audit records\n";
+        echo "  discovery:scan [config]         Scan a Kamailio configuration\n";
+        echo "  discovery:dependencies [config] Show database adapters used by discovered config\n";
+        echo "  serve [host:port]               Run loopback-only development server\n";
+        exit($command === 'help' ? 0 : 2);
+}

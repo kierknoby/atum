@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module>
+  <rawname>framework</rawname>
+  <name>Atum Framework</name>
+  <version>0.1.0</version>
+  <publisher>FreePBX UK</publisher>
+  <license>GPL-3.0-or-later</license>
+  <category>Admin</category>
+  <permission>view</permission>
+  <description>Core Atum framework services.</description>
+  <enabled>true</enabled>
+  <depends><phpversion>8.2.0</phpversion><extension>pdo_sqlite</extension><extension>session</extension><extension>openssl</extension></depends>
+</module>

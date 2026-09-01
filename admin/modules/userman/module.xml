@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module>
+  <rawname>userman</rawname>
+  <name>Administrators</name>
+  <version>0.1.0</version>
+  <publisher>FreePBX UK</publisher>
+  <license>GPL-3.0-or-later</license>
+  <category>Admin</category>
+  <permission>admin</permission>
+  <description>Local Atum administrator account and role management.</description>
+  <enabled>true</enabled>
+  <depends><module>framework</module></depends>
+  <menuitems>
+    <item><id>userman</id><name>Administrators</name><category>Admin</category><sort>20</sort><permission>admin</permission></item>
+  </menuitems>
+</module>

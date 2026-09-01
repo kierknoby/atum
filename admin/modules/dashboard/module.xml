@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module>
+  <rawname>dashboard</rawname>
+  <name>Dashboard</name>
+  <version>0.1.0</version>
+  <publisher>FreePBX UK</publisher>
+  <license>GPL-3.0-or-later</license>
+  <category>System</category>
+  <permission>view</permission>
+  <description>Atum and adopted Kamailio system overview.</description>
+  <enabled>true</enabled>
+  <depends><module>framework</module></depends>
+  <menuitems>
+    <item>
+      <id>dashboard</id>
+      <name>Dashboard</name>
+      <category>System</category>
+      <sort>1</sort>
+    </item>
+  </menuitems>
+</module>

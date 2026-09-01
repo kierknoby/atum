@@ -1,0 +1,295 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+set -eu
+
+ATUM_MIN_PHP="8.2.0"
+SOURCE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PREFIX="${ATUM_PREFIX:-/usr/share/atum}"
+STATE_DIR="${ATUM_STATE_DIR:-/var/lib/atum}"
+CONFIG_DIR="${ATUM_CONFIG_DIR:-/etc/atum}"
+KAMAILIO_CONFIG="${KAMAILIO_CONFIG:-}"
+CHECK_ONLY=0
+NO_DEPS=0
+INSTALL_COMMITTED=0
+USER_CREATED=0
+GROUP_CREATED=0
+PACKAGES_ADDED=""
+ASSUME_YES=0
+ALLOW_NO_KAMAILIO=0
+DEVELOPMENT_ACK=0
+
+usage() {
+cat <<'EOF'
+Atum GUI installer
+
+Usage: ./install [options]
+
+  --check                     pre-flight only; make no changes
+  --no-deps                   do not install missing OS packages
+  --yes, -y                   answer yes to dependency prompts
+  --prefix=/path              application path (default /usr/share/atum)
+  --kamailio-config=/path     existing Kamailio configuration
+  --allow-no-kamailio         development install without Kamailio
+  --development               acknowledge v0.1 is NOT SUITABLE FOR PRODUCTION
+  --help, -h                  show this help
+EOF
+}
+
+for arg in "$@"; do
+    case "$arg" in
+        --check) CHECK_ONLY=1 ;;
+        --no-deps) NO_DEPS=1 ;;
+        --yes|-y) ASSUME_YES=1 ;;
+        --prefix=*) PREFIX=${arg#--prefix=} ;;
+        --kamailio-config=*) KAMAILIO_CONFIG=${arg#--kamailio-config=} ;;
+        --allow-no-kamailio) ALLOW_NO_KAMAILIO=1 ;;
+        --development) DEVELOPMENT_ACK=1 ;;
+        --help|-h) usage; exit 0 ;;
+        *) echo "Unknown option: $arg" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
+say() { printf '%s\n' "$*"; }
+fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+OS_ID=unknown
+OS_NAME=Unknown
+OS_LIKE=""
+KERNEL=$(uname -s 2>/dev/null || echo unknown)
+if [ -r /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    OS_ID=${ID:-unknown}
+    OS_NAME=${PRETTY_NAME:-${NAME:-$OS_ID}}
+    OS_LIKE=${ID_LIKE:-}
+elif [ "$KERNEL" = Darwin ]; then
+    OS_ID=macos
+    OS_NAME=macOS
+fi
+
+PKG_MANAGER=""
+for pm in apt-get dnf yum zypper apk pkg brew; do
+    command -v "$pm" >/dev/null 2>&1 && { PKG_MANAGER=$pm; break; }
+done
+
+WEB_SERVER=none
+if command -v apache2 >/dev/null 2>&1 || command -v httpd >/dev/null 2>&1; then
+    WEB_SERVER=apache
+elif command -v nginx >/dev/null 2>&1; then
+    WEB_SERVER=nginx
+fi
+
+SERVICE_MANAGER=unknown
+if command -v systemctl >/dev/null 2>&1; then
+    SERVICE_MANAGER=systemd
+elif command -v rc-service >/dev/null 2>&1; then
+    SERVICE_MANAGER=openrc
+elif command -v service >/dev/null 2>&1; then
+    SERVICE_MANAGER=service
+elif [ "$KERNEL" = Darwin ] && command -v launchctl >/dev/null 2>&1; then
+    SERVICE_MANAGER=launchd
+fi
+
+KAMAILIO_BINARY=$(command -v kamailio 2>/dev/null || true)
+KAMAILIO_VERSION=unknown
+if [ -n "$KAMAILIO_BINARY" ]; then
+    KAMAILIO_VERSION=$($KAMAILIO_BINARY -V 2>/dev/null | sed -n 's/^version:[[:space:]]*kamailio[[:space:]]*\([^[:space:]]*\).*/\1/p' | head -n 1)
+    [ -n "$KAMAILIO_VERSION" ] || KAMAILIO_VERSION=unknown
+fi
+
+if [ -z "$KAMAILIO_CONFIG" ]; then
+    for candidate in /etc/kamailio/kamailio.cfg /usr/local/etc/kamailio/kamailio.cfg; do
+        [ -f "$candidate" ] && { KAMAILIO_CONFIG=$candidate; break; }
+    done
+fi
+
+PHP_VERSION=missing
+PHP_OK=0
+if command -v php >/dev/null 2>&1; then
+    PHP_VERSION=$(php -r 'echo PHP_VERSION;' 2>/dev/null || echo unknown)
+    php -r 'exit(version_compare(PHP_VERSION,"8.2.0",">=")?0:1);' >/dev/null 2>&1 && PHP_OK=1
+fi
+
+MISSING_EXT=""
+if [ "$PHP_OK" -eq 1 ]; then
+    for ext in pdo_sqlite session openssl; do
+        php -r 'exit(extension_loaded($argv[1])?0:1);' "$ext" >/dev/null 2>&1 || MISSING_EXT="$MISSING_EXT $ext"
+    done
+fi
+
+DB_SCHEMES=""
+discover_db_schemes() {
+    [ "$PHP_OK" -eq 1 ] || return 0
+    [ -n "$KAMAILIO_CONFIG" ] && [ -r "$KAMAILIO_CONFIG" ] || return 0
+    DB_SCHEMES=$(php -r '
+        require $argv[1];
+        try {
+            $report = (new AtumKamailioScanner())->scan($argv[2]);
+            echo implode(" ", $report["database_schemes"] ?? []);
+        } catch (Throwable $e) {
+            fwrite(STDERR, "Atum dependency discovery failed: " . $e->getMessage() . "\n");
+            exit(2);
+        }
+    ' "$SOURCE_DIR/admin/libraries/Atum/Kamailio/Scanner.class.php" "$KAMAILIO_CONFIG") || fail "Unable to inspect the Kamailio configuration safely."
+}
+discover_db_schemes
+
+say "Atum GUI installation pre-flight"
+say ""
+say "WARNING          : DEVELOPMENT PREVIEW - NOT SUITABLE FOR PRODUCTION"
+say "Operating system : $OS_NAME"
+say "Package manager  : ${PKG_MANAGER:-not detected}"
+say "Service manager  : $SERVICE_MANAGER"
+say "Web server       : $WEB_SERVER (Atum does not configure it in v0.1)"
+say "PHP              : $PHP_VERSION (minimum $ATUM_MIN_PHP)"
+say "Missing PHP ext  : ${MISSING_EXT:-none}"
+say "Kamailio binary  : ${KAMAILIO_BINARY:-not found}"
+say "Kamailio version : $KAMAILIO_VERSION"
+say "Kamailio config  : ${KAMAILIO_CONFIG:-not found}"
+say "DB schemes seen  : ${DB_SCHEMES:-none/unknown}"
+say "Application      : $PREFIX"
+say "State            : $STATE_DIR"
+say "Configuration    : $CONFIG_DIR"
+say ""
+
+if [ "$CHECK_ONLY" -eq 1 ]; then
+    [ "$PHP_OK" -eq 1 ] || exit 1
+    [ -z "$MISSING_EXT" ] || exit 1
+    [ -n "$KAMAILIO_CONFIG" ] || [ "$ALLOW_NO_KAMAILIO" -eq 1 ] || exit 1
+    exit 0
+fi
+
+[ "$DEVELOPMENT_ACK" -eq 1 ] || fail "Atum v0.1 is NOT SUITABLE FOR PRODUCTION. Rerun with --development only on a test/non-production host."
+[ "$(id -u)" -eq 0 ] || fail "System installation must be run as root."
+command -v groupadd >/dev/null 2>&1 || fail "This v0.1 system installer requires groupadd; use --check only on other platforms."
+command -v useradd >/dev/null 2>&1 || fail "This v0.1 system installer requires useradd; use --check only on other platforms."
+[ ! -e "$PREFIX" ] || fail "Atum is already present at $PREFIX. v0.1 has no supported in-place upgrade path; do not overwrite an installation."
+[ ! -e "$STATE_DIR" ] || fail "Atum state already exists at $STATE_DIR. Refusing to overwrite it."
+[ ! -e "$CONFIG_DIR" ] || fail "Atum configuration already exists at $CONFIG_DIR. Refusing to overwrite it."
+
+if [ -z "$KAMAILIO_CONFIG" ]; then
+    [ "$ALLOW_NO_KAMAILIO" -eq 1 ] || fail "No existing Kamailio configuration found."
+else
+    [ -r "$KAMAILIO_CONFIG" ] || fail "Kamailio configuration is not readable: $KAMAILIO_CONFIG"
+fi
+
+snapshot_packages() {
+    case "$PKG_MANAGER" in
+        apt-get) dpkg-query -W -f='${binary:Package}\n' 2>/dev/null | sort -u ;;
+        dnf|yum) rpm -qa --qf '%{NAME}\n' 2>/dev/null | sort -u ;;
+        *) : ;;
+    esac
+}
+
+BEFORE=$(mktemp)
+AFTER=$(mktemp)
+rollback_install() {
+    status=$?
+    trap - EXIT HUP INT TERM
+    rm -f "$BEFORE" "$AFTER"
+    if [ "$status" -ne 0 ] && [ "$INSTALL_COMMITTED" -eq 0 ]; then
+        [ "$USER_CREATED" -eq 1 ] && command -v userdel >/dev/null 2>&1 && userdel atum >/dev/null 2>&1 || true
+        [ "$GROUP_CREATED" -eq 1 ] && command -v groupdel >/dev/null 2>&1 && groupdel atum >/dev/null 2>&1 || true
+        if [ -n "$PACKAGES_ADDED" ]; then
+            case "$PKG_MANAGER" in
+                apt-get)
+                    DEBIAN_FRONTEND=noninteractive apt-get purge -y $PACKAGES_ADDED >/dev/null 2>&1 || true
+                    ;;
+                dnf|yum)
+                    "$PKG_MANAGER" remove -y $PACKAGES_ADDED >/dev/null 2>&1 || true
+                    ;;
+            esac
+        fi
+    fi
+    exit "$status"
+}
+trap rollback_install EXIT HUP INT TERM
+snapshot_packages > "$BEFORE"
+
+refresh_packages_added() {
+    snapshot_packages > "$AFTER"
+    PACKAGES_ADDED=$(comm -13 "$BEFORE" "$AFTER" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+}
+
+confirm_packages() {
+    [ "$ASSUME_YES" -eq 1 ] && return 0
+    [ -r /dev/tty ] || return 1
+    printf 'Install required operating-system package(s): %s? [y/N] ' "$*" > /dev/tty
+    read answer < /dev/tty || return 1
+    case "$answer" in y|Y|yes|YES|Yes) return 0 ;; *) return 1 ;; esac
+}
+
+install_packages() {
+    [ "$NO_DEPS" -eq 0 ] || return 1
+    confirm_packages "$@" || return 1
+    case "$PKG_MANAGER" in
+        apt-get)
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@"
+            ;;
+        dnf|yum)
+            "$PKG_MANAGER" install -y "$@"
+            ;;
+        *) return 1 ;;
+    esac
+    refresh_packages_added
+}
+
+
+if [ "$PHP_OK" -ne 1 ]; then
+    if command -v php >/dev/null 2>&1; then
+        fail "PHP $PHP_VERSION is too old. Atum will not add third-party repositories automatically."
+    fi
+    case "$PKG_MANAGER" in
+        apt-get) install_packages php-cli php-common || fail "Install PHP >= 8.2 and rerun." ;;
+        dnf|yum) install_packages php-cli php-common || fail "Install PHP >= 8.2 and rerun." ;;
+        *) fail "Install PHP >= 8.2 and rerun." ;;
+    esac
+fi
+
+# Re-evaluate required baseline extensions after PHP installation.
+PHP_OK=1
+MISSING_EXT=""
+for ext in pdo_sqlite session openssl; do
+    php -r 'exit(extension_loaded($argv[1])?0:1);' "$ext" >/dev/null 2>&1 || MISSING_EXT="$MISSING_EXT $ext"
+done
+
+for ext in $MISSING_EXT; do
+    case "$ext:$PKG_MANAGER" in
+        pdo_sqlite:apt-get) install_packages php-sqlite3 || fail "Missing pdo_sqlite; install php-sqlite3." ;;
+        pdo_sqlite:dnf|pdo_sqlite:yum) install_packages php-pdo || fail "Missing pdo_sqlite; install a PHP SQLite/PDO package." ;;
+        *) fail "Missing required PHP extension: $ext" ;;
+    esac
+done
+
+refresh_packages_added
+discover_db_schemes
+say "Kamailio DB use : ${DB_SCHEMES:-none/unknown} (reported only; adapters are module dependencies)"
+
+if (command -v getent >/dev/null 2>&1 && getent group atum >/dev/null 2>&1) || id atum >/dev/null 2>&1 || grep -q '^atum:' /etc/group 2>/dev/null; then
+    fail "A pre-existing user or group named 'atum' exists. Refusing to reuse an identity Atum did not create."
+fi
+groupadd --system atum
+GROUP_CREATED=1
+NOLOGIN_SHELL=$(command -v nologin 2>/dev/null || printf '%s' /usr/sbin/nologin)
+useradd --system --gid atum --home-dir "$STATE_DIR" --shell "$NOLOGIN_SHELL" atum
+USER_CREATED=1
+
+ATUM_INSTALL_BOOTSTRAPPED=1 php "$SOURCE_DIR/install.php" \
+    --prefix="$PREFIX" \
+    --state-dir="$STATE_DIR" \
+    --config-dir="$CONFIG_DIR" \
+    --kamailio-config="$KAMAILIO_CONFIG" \
+    --os-id="$OS_ID" \
+    --package-manager="$PKG_MANAGER" \
+    --packages-added="$PACKAGES_ADDED" \
+    --user-created="$USER_CREATED" \
+    --group-created="$GROUP_CREATED"
+
+INSTALL_COMMITTED=1
+
+say ""
+say "Atum installed without modifying Kamailio."
+say "Run for local testing: sudo -u atum atum serve"
+say "For remote testing, tunnel 127.0.0.1:8090 over SSH. Do not expose v0.1 directly to a network."
+say "Run: atum-uninstall --check to preview complete removal."

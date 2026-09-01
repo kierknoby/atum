@@ -1,0 +1,82 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color: #25282d;
+  background: #eef1f4;
+  line-height: 1.45;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: #eef1f4; }
+a { color: #166a9c; text-decoration: none; }
+a:hover { text-decoration: underline; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .92em; }
+.topbar { height: 58px; background: #23282d; color: #fff; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; position: sticky; top: 0; z-index: 20; box-shadow: 0 1px 4px rgba(0,0,0,.24); }
+.brand { color: #fff; font-size: 22px; font-weight: 700; letter-spacing: .08em; text-decoration: none; }
+.brand:hover { text-decoration: none; }
+.brand span { font-weight: 400; opacity: .72; letter-spacing: .03em; }
+.topbar-actions { display: flex; gap: 12px; align-items: center; }
+.read-only-pill { display: inline-block; padding: 3px 8px; font-size: 11px; font-weight: 700; letter-spacing: .08em; color: #36576f; background: #e5f2fb; border: 1px solid #b9d9ec; border-radius: 3px; margin-left: 8px; }
+.apply-button, .button { border: 1px solid #a7adb3; background: #fff; border-radius: 3px; padding: 8px 13px; font-weight: 600; cursor: pointer; }
+.apply-button:disabled { background: #4b5158; color: #aeb5bd; border-color: #5f666e; cursor: not-allowed; }
+.button-primary { color: #fff; background: #1677a8; border-color: #116890; }
+.button:disabled { opacity: .6; cursor: wait; }
+.app-shell { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: calc(100vh - 58px); }
+.sidebar { background: #fff; border-right: 1px solid #d9dde1; padding: 16px 0 28px; }
+.menu-category { color: #747b83; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; padding: 14px 18px 5px; }
+.menu-item { display: block; color: #2f3439; padding: 8px 18px; border-left: 3px solid transparent; }
+.menu-item:hover { text-decoration: none; background: #f3f5f7; }
+.menu-item.active { color: #126a99; background: #edf6fb; border-left-color: #1786bc; font-weight: 600; }
+.content { min-width: 0; padding: 26px 30px 50px; }
+.page-heading { display: flex; justify-content: space-between; gap: 20px; align-items: center; margin-bottom: 20px; }
+h1 { margin: 0; font-size: 28px; font-weight: 500; }
+h2 { margin: 0; font-size: 17px; font-weight: 600; }
+.page-heading p { margin: 4px 0 0; color: #68717a; }
+.notice { padding: 12px 14px; margin: 0 0 18px; border: 1px solid; border-left-width: 4px; background: #fff; }
+.notice-info { border-color: #9bc8df; }
+.notice-warning { border-color: #d6b65a; }
+.notice-danger { border-color: #d37474; }
+.stats-grid { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 14px; margin: 0 0 18px; }
+.stat { background: #fff; border: 1px solid #d9dde1; border-radius: 3px; padding: 16px; box-shadow: 0 1px 1px rgba(0,0,0,.03); }
+.stat span { display: block; color: #69727b; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.stat strong { display: block; margin-top: 4px; font-size: 26px; font-weight: 500; }
+.panel { background: #fff; border: 1px solid #d6dadd; border-radius: 3px; margin-bottom: 18px; box-shadow: 0 1px 1px rgba(0,0,0,.03); }
+.panel-heading { padding: 11px 14px; border-bottom: 1px solid #e1e4e7; background: #f7f8f9; }
+.panel-body { padding: 14px; }
+.table-wrap { overflow-x: auto; padding: 0; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 10px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid #e7e9eb; }
+th { color: #545b62; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; background: #fafbfc; }
+tbody tr:last-child td { border-bottom: 0; }
+.two-column { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 18px; }
+.details { display: grid; grid-template-columns: 150px minmax(0,1fr); gap: 8px 16px; margin: 0; }
+.details dt { color: #69727b; }
+.details dd { margin: 0; overflow-wrap: anywhere; }
+.status-good { color: #267346; font-weight: 600; }
+@media (max-width: 900px) {
+  .app-shell { grid-template-columns: 1fr; }
+  .sidebar { border-right: 0; border-bottom: 1px solid #d9dde1; }
+  .stats-grid { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
+  .two-column { grid-template-columns: 1fr; }
+}
+
+.login-body { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+.login-card { width: min(420px, 100%); background: #fff; border: 1px solid #d6dadd; padding: 28px; box-shadow: 0 8px 28px rgba(0,0,0,.10); }
+.login-brand { font-size: 24px; font-weight: 700; letter-spacing: .08em; margin-bottom: 22px; }
+.login-brand span { font-weight: 400; opacity: .65; }
+.login-card h1 { margin-bottom: 20px; }
+.login-card label { display: block; font-size: 13px; font-weight: 600; margin: 14px 0; }
+.login-card input { display: block; width: 100%; margin-top: 6px; padding: 10px 11px; border: 1px solid #b9bec4; border-radius: 3px; font: inherit; }
+.signed-in { color: #d8dde1; font-size: 13px; }
+.logout-link { color: #fff; font-size: 13px; }
+
+.development-pill { display: inline-block; padding: 3px 8px; font-size: 10px; font-weight: 800; letter-spacing: .06em; color: #2f2410; background: #f6d77a; border: 1px solid #d4ad37; border-radius: 3px; }
+.logout-form { margin: 0; }
+.logout-button { border: 0; background: transparent; padding: 0; cursor: pointer; font: inherit; }
+.logout-button:hover { text-decoration: underline; }
+.inline-form { display: grid; grid-template-columns: minmax(150px, 1fr) 160px minmax(220px, 1.4fr) auto; gap: 12px; align-items: end; }
+.inline-form label { font-size: 12px; font-weight: 600; color: #545b62; }
+.inline-form input, .inline-form select, .password-action input { width: 100%; margin-top: 5px; padding: 8px 9px; border: 1px solid #b9bec4; border-radius: 3px; font: inherit; background: #fff; }
+.password-action { display: flex; gap: 6px; min-width: 250px; }
+.action-buttons { white-space: nowrap; }
+.action-buttons .button + .button { margin-left: 6px; }
+@media (max-width: 1050px) { .inline-form { grid-template-columns: 1fr 1fr; } }

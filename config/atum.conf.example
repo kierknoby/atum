@@ -1,0 +1,8 @@
+# Atum GUI configuration
+# v0.1 is a development preview and is NOT SUITABLE FOR PRODUCTION.
+KAMAILIO_CONFIG="/etc/kamailio/kamailio.cfg"
+ATUM_STATE_DIR="/var/lib/atum"
+ATUM_READ_ONLY=true
+ATUM_BIND="127.0.0.1:8090"
+# Non-loopback plain HTTP is rejected regardless. Set true to require HTTPS even on loopback.
+ATUM_REQUIRE_HTTPS=false

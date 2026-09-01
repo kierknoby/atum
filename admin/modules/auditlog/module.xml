@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module>
+  <rawname>auditlog</rawname><name>Audit Log</name><version>0.1.0</version><publisher>FreePBX UK</publisher><license>GPL-3.0-or-later</license>
+  <category>Admin</category><permission>admin</permission><description>Security and management audit trail.</description><enabled>true</enabled>
+  <depends><module>framework</module></depends>
+  <menuitems><item><id>auditlog</id><name>Audit Log</name><category>Admin</category><sort>30</sort><permission>admin</permission></item></menuitems>
+</module>

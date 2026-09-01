@@ -1,0 +1,55 @@
+<?php
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+require_once __DIR__ . '/../../libraries/Atum/Kamailio/Scanner.class.php';
+
+class Discovery extends AtumModule
+{
+    public function scan(?string $config = null): array
+    {
+        $config ??= (string) $this->Atum->Config->get('KAMAILIO_CONFIG');
+        return (new AtumKamailioScanner())->scan($config);
+    }
+
+    public function showPage(): string
+    {
+        try {
+            $report = $this->scan();
+            $error = null;
+        } catch (Throwable $e) {
+            $report = null;
+            $error = 'Kamailio discovery failed. See the Atum audit log for details.';
+            try {
+                $this->Atum->Audit->log('discovery.page.error', 'failure', 'kamailio', null, $e->getMessage());
+            } catch (Throwable) {
+                // Keep the browser error generic even if audit storage is unavailable.
+            }
+        }
+
+        return $this->Atum->View->load(__DIR__ . '/views/default.php', [
+            'report' => $report,
+            'error' => $error,
+            'configPath' => (string) $this->Atum->Config->get('KAMAILIO_CONFIG'),
+        ]);
+    }
+
+    public function ajaxRequest(string $command, array &$settings = []): bool
+    {
+        if ($command !== 'scan') {
+            return false;
+        }
+
+        $settings['read_only'] = true;
+        $settings['permission'] = 'view';
+        $settings['method'] = 'GET';
+        return true;
+    }
+
+    public function ajaxHandler(): mixed
+    {
+        return match ((string) ($_REQUEST['command'] ?? '')) {
+            'scan' => $this->scan(),
+            default => false,
+        };
+    }
+}

@@ -1,0 +1,14 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+set -eu
+
+SCRIPT=$0
+while [ -L "$SCRIPT" ]; do
+    LINK=$(readlink "$SCRIPT")
+    case "$LINK" in
+        /*) SCRIPT=$LINK ;;
+        *) SCRIPT=$(dirname "$SCRIPT")/$LINK ;;
+    esac
+done
+SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$SCRIPT")" && pwd)
+exec php "$SELF_DIR/uninstall.php" "$@"

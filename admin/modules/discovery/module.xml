@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module>
+  <rawname>discovery</rawname>
+  <name>Kamailio Discovery</name>
+  <version>0.1.0</version>
+  <publisher>FreePBX UK</publisher>
+  <license>GPL-3.0-or-later</license>
+  <category>Kamailio</category>
+  <permission>view</permission>
+  <description>Read-only discovery and inventory of an existing Kamailio installation.</description>
+  <enabled>true</enabled>
+  <depends>
+    <module>framework</module>
+  </depends>
+  <menuitems>
+    <item>
+      <id>discovery</id>
+      <name>Discovery</name>
+      <category>Kamailio</category>
+      <sort>10</sort>
+    </item>
+  </menuitems>
+</module>

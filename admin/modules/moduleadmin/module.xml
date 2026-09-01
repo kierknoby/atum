@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module>
+  <rawname>moduleadmin</rawname>
+  <name>Module Admin</name>
+  <version>0.1.0</version>
+  <publisher>FreePBX UK</publisher>
+  <license>GPL-3.0-or-later</license>
+  <category>Admin</category>
+  <permission>admin</permission>
+  <description>Atum module inventory and lifecycle management.</description>
+  <enabled>true</enabled>
+  <depends><module>framework</module></depends>
+  <menuitems>
+    <item>
+      <id>moduleadmin</id>
+      <name>Module Admin</name>
+      <category>Admin</category>
+      <sort>10</sort>
+    </item>
+  </menuitems>
+</module>
