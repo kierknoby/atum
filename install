@@ -115,6 +115,21 @@ for pm in apt-get dnf yum zypper apk pkg brew; do
     command -v "$pm" >/dev/null 2>&1 && { PKG_MANAGER=$pm; break; }
 done
 
+PHP_VERSION=missing
+PHP_OK=0
+if command -v php >/dev/null 2>&1; then
+    PHP_VERSION=$(php -r 'echo PHP_VERSION;' 2>/dev/null || echo unknown)
+    php -r 'exit(version_compare(PHP_VERSION,"8.2.0",">=")?0:1);' >/dev/null 2>&1 && PHP_OK=1
+fi
+if [ "$CHECK_ONLY" -eq 1 ] && [ "$PHP_OK" -ne 1 ]; then
+    fail "Atum requires PHP 8.2 or newer CLI. Detected: $PHP_VERSION"
+fi
+if [ "$CHECK_ONLY" -eq 1 ]; then
+    command -v flock >/dev/null 2>&1 || fail "System installation requires flock."
+    command -v groupadd >/dev/null 2>&1 || fail "System installation requires groupadd."
+    command -v useradd >/dev/null 2>&1 || fail "System installation requires useradd."
+fi
+
 NGINX_DETECTED=0
 APACHE_DETECTED=0
 command -v nginx >/dev/null 2>&1 && NGINX_DETECTED=1
@@ -141,14 +156,14 @@ WEB_SERVICE=""
 WEB_GROUP=""
 WEB_CONFIG=""
 WEB_ENABLE_LINK=""
+WEB_CONFIG_TEST_BINARY=""
+WEB_CONFIG_TEST_ARGUMENT=""
 SERVICE_COMMAND="${ATUM_SERVICE_COMMAND:-systemctl}"
 if [ "$REMOTE_MODE" -eq 1 ]; then
     [ "$CHECK_ONLY" -eq 1 ] || [ "$DEVELOPMENT_ACK" -eq 1 ] || fail "Remote access requires the explicit --development acknowledgement."
     [ "$KERNEL" = Linux ] || fail "Remote development deployment is currently supported only on Linux."
     command -v systemctl >/dev/null 2>&1 || fail "Remote development currently requires a systemd-managed Linux host."
-    command -v flock >/dev/null 2>&1 || fail "Remote development system installation requires flock."
-    command -v groupadd >/dev/null 2>&1 || fail "Remote development system installation requires groupadd."
-    command -v useradd >/dev/null 2>&1 || fail "Remote development system installation requires useradd."
+    [ "$PHP_OK" -eq 1 ] || fail "Remote development requires a working PHP 8.2 or newer CLI and matching PHP-FPM."
     case "$LISTEN_ADDRESS" in *[!0-9a-fA-F:.]*|'') fail "--listen-address must be a literal IPv4 or IPv6 address." ;; esac
     php -r 'exit(filter_var($argv[1], FILTER_VALIDATE_IP) === false ? 1 : 0);' "$LISTEN_ADDRESS" >/dev/null 2>&1 || fail "--listen-address must be a valid literal IPv4 or IPv6 address."
     case "$LISTEN_PORT" in *[!0-9]*|'') fail "--listen-port must be an integer from 1 to 65535." ;; esac
@@ -166,6 +181,8 @@ if [ "$REMOTE_MODE" -eq 1 ]; then
         done
     fi
     [ -n "$FPM_BINARY" ] || fail "Remote development requires PHP-FPM matching the selected PHP. Install it and rerun; Atum will not install a web stack automatically."
+    case "$FPM_BINARY" in /*) ;; *) fail "PHP-FPM binary must resolve to an absolute path." ;; esac
+    [ -x "$FPM_BINARY" ] || fail "PHP-FPM binary is not executable: $FPM_BINARY"
     FPM_VERSION=$($FPM_BINARY -v 2>&1 | sed -n 's/^PHP \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -n1)
     [ -n "$FPM_VERSION" ] || FPM_VERSION=$PHP_MM
     [ "$FPM_VERSION" = "$PHP_MM" ] || fail "PHP-FPM $FPM_VERSION does not match the selected PHP CLI $PHP_MM."
@@ -180,11 +197,19 @@ if [ "$REMOTE_MODE" -eq 1 ]; then
         FPM_SERVICE="${ATUM_FPM_SERVICE:-php$FPM_VERSION-fpm}"; FPM_SOCKET=${FPM_SOCKET:-/run/php/atum-fpm.sock}
     fi
     if [ "$WEB_SERVER" = nginx ]; then
+        WEB_CONFIG_TEST_BINARY=${ATUM_WEB_CONFIG_TEST_BINARY:-$(command -v nginx 2>/dev/null || true)}
+        WEB_CONFIG_TEST_ARGUMENT=-t
         NGINX_DIR=${ATUM_NGINX_CONFIG_DIR:-/etc/nginx/conf.d}
         [ -d "$NGINX_DIR" ] || fail "Nginx configuration directory is unavailable: $NGINX_DIR"
         WEB_CONFIG="$NGINX_DIR/atum.conf"; WEB_SERVICE=${ATUM_WEB_SERVICE:-nginx}
         if getent group www-data >/dev/null 2>&1; then WEB_GROUP=www-data; else WEB_GROUP=${ATUM_WEB_GROUP:-nginx}; fi
     else
+        if [ -n "${ATUM_WEB_CONFIG_TEST_BINARY:-}" ]; then WEB_CONFIG_TEST_BINARY=$ATUM_WEB_CONFIG_TEST_BINARY; WEB_CONFIG_TEST_ARGUMENT=${ATUM_WEB_CONFIG_TEST_ARGUMENT:-configtest}
+        elif command -v apache2ctl >/dev/null 2>&1; then WEB_CONFIG_TEST_BINARY=$(command -v apache2ctl); WEB_CONFIG_TEST_ARGUMENT=configtest
+        elif command -v apachectl >/dev/null 2>&1; then WEB_CONFIG_TEST_BINARY=$(command -v apachectl); WEB_CONFIG_TEST_ARGUMENT=configtest
+        elif command -v httpd >/dev/null 2>&1; then WEB_CONFIG_TEST_BINARY=$(command -v httpd); WEB_CONFIG_TEST_ARGUMENT=-t
+        else WEB_CONFIG_TEST_BINARY=$(command -v apache2 2>/dev/null || true); WEB_CONFIG_TEST_ARGUMENT=-t
+        fi
         if [ -n "${ATUM_APACHE_CONFIG_DIR:-}" ]; then APACHE_DIR=$ATUM_APACHE_CONFIG_DIR
         elif [ -d /etc/apache2/sites-available ]; then APACHE_DIR=/etc/apache2/sites-available
         elif [ -d /etc/httpd/conf.d ]; then APACHE_DIR=/etc/httpd/conf.d
@@ -194,6 +219,8 @@ if [ "$REMOTE_MODE" -eq 1 ]; then
         if [ "$APACHE_DIR" = /etc/apache2/sites-available ]; then WEB_ENABLE_LINK="${ATUM_APACHE_ENABLED_DIR:-/etc/apache2/sites-enabled}/atum.conf"; fi
         if getent group www-data >/dev/null 2>&1; then WEB_GROUP=www-data; else WEB_GROUP=${ATUM_WEB_GROUP:-apache}; fi
     fi
+    case "$WEB_CONFIG_TEST_BINARY" in /*) ;; *) fail "Unable to locate an absolute web-server configuration-test command." ;; esac
+    [ -x "$WEB_CONFIG_TEST_BINARY" ] || fail "Web-server configuration-test command is not executable: $WEB_CONFIG_TEST_BINARY"
 fi
 
 SERVICE_MANAGER=unknown
@@ -218,13 +245,6 @@ if [ -z "$KAMAILIO_CONFIG" ]; then
     for candidate in /etc/kamailio/kamailio.cfg /usr/local/etc/kamailio/kamailio.cfg; do
         [ -f "$candidate" ] && { KAMAILIO_CONFIG=$candidate; break; }
     done
-fi
-
-PHP_VERSION=missing
-PHP_OK=0
-if command -v php >/dev/null 2>&1; then
-    PHP_VERSION=$(php -r 'echo PHP_VERSION;' 2>/dev/null || echo unknown)
-    php -r 'exit(version_compare(PHP_VERSION,"8.2.0",">=")?0:1);' >/dev/null 2>&1 && PHP_OK=1
 fi
 
 MISSING_EXT=""
@@ -311,6 +331,12 @@ recover_transaction() {
         elif [ "$kind" = symlink ] && [ -L "$old_path" ]; then
             [ "$(readlink "$old_path")" = "$expected" ] || fail "Interrupted Atum host symlink changed; refusing to remove it: $old_path"
             rm -f "$old_path"
+        elif [ "$kind" = transient ]; then
+            if [ -e "$old_path" ] || [ -L "$old_path" ]; then
+                [ -f "$old_path" ] && [ ! -L "$old_path" ] \
+                    || fail "Interrupted Atum transient host path is not a regular file: $old_path"
+                rm -f "$old_path"
+            fi
         fi
     done
     for record in "$TRANSACTION_DIR"/reload-service-*; do
@@ -334,8 +360,20 @@ recover_transaction() {
         fi
     done
     if [ -s "$TRANSACTION_DIR/packages-added" ]; then RECOVERED_PACKAGES=$(tr '\n' ' ' < "$TRANSACTION_DIR/packages-added" | sed 's/[[:space:]]*$//'); say "Retaining and carrying forward packages from interrupted installation: $RECOVERED_PACKAGES"; fi
-    id atum >/dev/null 2>&1 && { [ -f "$TRANSACTION_DIR/intended-user" ] || [ -f "$TRANSACTION_DIR/user-created" ]; } && userdel atum >/dev/null 2>&1 || true
-    { [ -f "$TRANSACTION_DIR/intended-group" ] || [ -f "$TRANSACTION_DIR/group-created" ]; } && groupdel atum >/dev/null 2>&1 || true
+    if id atum >/dev/null 2>&1; then
+        if [ -f "$TRANSACTION_DIR/user-created" ]; then
+            userdel atum >/dev/null 2>&1 || fail "Unable to remove Atum user while recovering interrupted installation."
+        elif [ -f "$TRANSACTION_DIR/intended-user" ]; then
+            fail "An atum user exists after an interrupted creation attempt, but Atum cannot prove that it created the account. Refusing to remove it."
+        fi
+    fi
+    if (command -v getent >/dev/null 2>&1 && getent group atum >/dev/null 2>&1) || grep -q '^atum:' /etc/group 2>/dev/null; then
+        if [ -f "$TRANSACTION_DIR/group-created" ]; then
+            groupdel atum >/dev/null 2>&1 || fail "Unable to remove Atum group while recovering interrupted installation."
+        elif [ -f "$TRANSACTION_DIR/intended-group" ]; then
+            fail "An atum group exists after an interrupted creation attempt, but Atum cannot prove that it created the group. Refusing to remove it."
+        fi
+    fi
     find "$TRANSACTION_DIR" -mindepth 1 -maxdepth 1 -type f -exec rm -f {} \;
     rmdir "$TRANSACTION_DIR"
 }
@@ -478,6 +516,9 @@ ATUM_INSTALL_BOOTSTRAPPED=1 php "$SOURCE_DIR/install.php" \
     --fpm-config="$FPM_CONFIG" \
     --fpm-socket="$FPM_SOCKET" \
     --fpm-service="$FPM_SERVICE" \
+    --fpm-binary="$FPM_BINARY" \
+    --web-config-test-binary="$WEB_CONFIG_TEST_BINARY" \
+    --web-config-test-argument="$WEB_CONFIG_TEST_ARGUMENT" \
     --service-command="$SERVICE_COMMAND" \
     --openssl="$(command -v openssl 2>/dev/null || true)"
 

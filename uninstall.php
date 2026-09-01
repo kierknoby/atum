@@ -151,6 +151,86 @@ if ($kamailioChangedByInstaller) {
     exit(1);
 }
 
+// Pre-validate every host artefact before --check can succeed or any
+// destructive uninstall operation begins.
+$preflightModifiedHostFiles = $ledger['host_integrations']['modified_files'] ?? [];
+if (!is_array($preflightModifiedHostFiles)) {
+    throw new RuntimeException('Invalid modified-file records in install ledger.');
+}
+
+foreach ($preflightModifiedHostFiles as $entry) {
+    $path = (string) ($entry['path'] ?? '');
+    $afterHash = (string) ($entry['after_sha256'] ?? '');
+    $backup = (string) ($entry['backup'] ?? '');
+
+    if ($path === '' || $afterHash === '' || $backup === '' || !is_readable($backup)) {
+        throw new RuntimeException('Incomplete modified-file record in install ledger.');
+    }
+    if (!is_file($path) || is_link($path)) {
+        throw new RuntimeException('Host file recorded as modified by Atum is missing or no longer a regular file: ' . $path);
+    }
+
+    $currentHash = (string) hash_file('sha256', $path);
+    $originalHash = (string) ($entry['before_sha256'] ?? hash_file('sha256', $backup));
+
+    if (!hash_equals($originalHash, $currentHash) && !hash_equals($afterHash, $currentHash)) {
+        throw new RuntimeException('Host file changed since Atum installed its integration; refusing to overwrite it: ' . $path);
+    }
+}
+
+$preflightCreatedHostFiles = $ledger['host_integrations']['created_files'] ?? [];
+if (!is_array($preflightCreatedHostFiles)) {
+    throw new RuntimeException('Invalid created-file records in install ledger.');
+}
+
+foreach ($preflightCreatedHostFiles as $entry) {
+    $path = (string) ($entry['path'] ?? '');
+    $type = (string) ($entry['type'] ?? '');
+    $expectedHash = (string) ($entry['sha256'] ?? '');
+
+    if ($path === '' || !in_array($type, ['file', 'symlink'], true)) {
+        throw new RuntimeException('Invalid created-file record in install ledger.');
+    }
+
+    if ($type === 'symlink') {
+        if (is_link($path)) {
+            if (readlink($path) !== (string) ($entry['target'] ?? '')) {
+                throw new RuntimeException('Atum-created host symlink was changed after installation; refusing to delete it: ' . $path);
+            }
+        } elseif (file_exists($path)) {
+            throw new RuntimeException('Atum-created host symlink path is now occupied by another object; refusing to delete it: ' . $path);
+        }
+        continue;
+    }
+
+    if (is_link($path)) {
+        throw new RuntimeException('Atum-created host file was replaced by a symlink; refusing to delete it: ' . $path);
+    }
+    if (!file_exists($path)) {
+        continue;
+    }
+    if (!is_file($path) || $expectedHash === ''
+        || !hash_equals($expectedHash, (string) hash_file('sha256', $path))) {
+        throw new RuntimeException('Atum-created host file was changed after installation; refusing to delete it: ' . $path);
+    }
+}
+
+$preflightLinks = [
+    '/usr/local/sbin/atum' => $target . '/bin/atum',
+    '/usr/local/sbin/atum-uninstall' => $target . '/uninstall.php',
+];
+
+foreach ($preflightLinks as $link => $expected) {
+    if (is_link($link)) {
+        $actual = readlink($link);
+        if ($actual !== $expected) {
+            throw new RuntimeException("Refusing to remove changed symlink {$link} -> {$actual}");
+        }
+    } elseif (file_exists($link)) {
+        throw new RuntimeException("Refusing to remove non-symlink path {$link}");
+    }
+}
+
 echo "Atum clean-removal plan\n\n";
 echo "Application     : {$target}\n";
 echo "Configuration   : {$configDir}\n";
@@ -223,12 +303,19 @@ foreach (($ledger['host_integrations']['modified_files'] ?? []) as $entry) {
     }
 }
 
-foreach (($ledger['host_integrations']['created_files'] ?? []) as $entry) {
+$createdHostFiles = $ledger['host_integrations']['created_files'] ?? [];
+if (!is_array($createdHostFiles)) {
+    throw new RuntimeException('Invalid created-file records in install ledger.');
+}
+
+// Verify every remaining Atum-created host artefact before deleting any of
+// them. A conflict must leave the complete integration intact for a safe retry.
+foreach ($createdHostFiles as $entry) {
     $path = (string) ($entry['path'] ?? '');
     $type = (string) ($entry['type'] ?? 'file');
     $expectedHash = (string) ($entry['sha256'] ?? '');
     if ($path === '') {
-        continue;
+        throw new RuntimeException('Invalid created-file path in install ledger.');
     }
     if ($type === 'symlink') {
         if (!is_link($path)) { continue; }
@@ -237,9 +324,19 @@ foreach (($ledger['host_integrations']['created_files'] ?? []) as $entry) {
         }
     } else {
         if (!is_file($path)) { continue; }
-        if ($expectedHash !== '' && !hash_equals($expectedHash, (string) hash_file('sha256', $path))) {
+        if (is_link($path) || $expectedHash === '' || !hash_equals($expectedHash, (string) hash_file('sha256', $path))) {
             throw new RuntimeException('Atum-created host file was changed after installation; refusing to delete it: ' . $path);
         }
+    }
+}
+
+foreach ($createdHostFiles as $entry) {
+    $path = (string) ($entry['path'] ?? '');
+    $type = (string) ($entry['type'] ?? 'file');
+    if ($type === 'symlink') {
+        if (!is_link($path)) { continue; }
+    } else {
+        if (!is_file($path) || is_link($path)) { continue; }
     }
     unlink($path);
 }

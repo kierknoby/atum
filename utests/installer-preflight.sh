@@ -21,9 +21,10 @@ run_case() {
     selection=$3
     expected=$4
     missing=${5:-}
+    scope=${6:-remote}
     case_root="$TEST_ROOT/$name"
     mkdir -p "$case_root/bin" "$case_root/nginx" "$case_root/apache-available" "$case_root/apache-enabled" "$case_root/fpm"
-    ln -s "$REAL_PHP" "$case_root/bin/php"
+    [ "$missing" = php ] || ln -s "$REAL_PHP" "$case_root/bin/php"
     ln -s "$REAL_OPENSSL" "$case_root/bin/openssl"
     ln -s "$REAL_SYSTEMCTL" "$case_root/bin/systemctl"
     for utility in dirname uname sed head getent; do
@@ -40,6 +41,8 @@ run_case() {
     case "$servers" in
         apache|both) printf '%s\n' '#!/bin/sh' 'exit 0' > "$case_root/bin/apache2"; chmod 0755 "$case_root/bin/apache2" ;;
     esac
+    remote_arg=
+    [ "$scope" = remote ] && remote_arg=--remote
     set +e
     PATH="$case_root/bin" \
         ATUM_FPM_BINARY="$case_root/bin/php-fpm-test" \
@@ -47,7 +50,7 @@ run_case() {
         ATUM_NGINX_CONFIG_DIR="$case_root/nginx" \
         ATUM_APACHE_CONFIG_DIR="$case_root/apache-available" \
         ATUM_APACHE_ENABLED_DIR="$case_root/apache-enabled" \
-        "$ROOT/install" --check --remote --allow-no-kamailio ${selection:+--web-server="$selection"} > "$case_root/output" 2>&1
+        "$ROOT/install" --check $remote_arg --allow-no-kamailio ${selection:+--web-server="$selection"} > "$case_root/output" 2>&1
     status=$?
     set -e
     case "$expected" in
@@ -61,7 +64,12 @@ run_case() {
             ;;
         missing)
             [ "$status" -ne 0 ] || { echo "$name unexpectedly passed" >&2; exit 1; }
-            grep -q "requires $missing" "$case_root/output"
+            if [ "$missing" = php ]; then
+                grep -q 'requires PHP 8.2 or newer CLI' "$case_root/output"
+                ! grep -q 'listen-address' "$case_root/output"
+            else
+                grep -q "requires $missing" "$case_root/output"
+            fi
             ;;
     esac
 }
@@ -74,5 +82,10 @@ run_case both-apache both apache pass
 run_case missing-flock nginx '' missing flock
 run_case missing-groupadd nginx '' missing groupadd
 run_case missing-useradd nginx '' missing useradd
+run_case missing-php-remote nginx '' missing php
+run_case missing-flock-local none '' missing flock local
+run_case missing-groupadd-local none '' missing groupadd local
+run_case missing-useradd-local none '' missing useradd local
+run_case missing-php-local none '' missing php local
 
-echo 'PASS  remote pre-flight prerequisites and explicit web-server selection'
+echo 'PASS  baseline and remote pre-flight prerequisites and explicit web-server selection'

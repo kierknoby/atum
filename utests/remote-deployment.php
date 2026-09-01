@@ -44,7 +44,9 @@ try {
         'web-config' => $paths['host'] . '/atum-nginx.conf', 'web-enable-link' => '',
         'web-service' => 'nginx', 'web-group' => 'www-data',
         'fpm-config' => $paths['host'] . '/atum-fpm.conf', 'fpm-socket' => '/run/php/atum-fpm.sock',
-        'fpm-service' => 'php8.3-fpm', 'service-command' => $service, 'openssl' => '/usr/bin/openssl',
+        'fpm-service' => 'php8.3-fpm', 'fpm-binary' => $service,
+        'web-config-test-binary' => $service, 'web-config-test-argument' => '-t',
+        'service-command' => $service, 'openssl' => '/usr/bin/openssl',
     ]);
     expect(($result['web_server'] ?? '') === 'nginx', 'Remote deployment did not report Nginx.');
     $nginx = (string) file_get_contents($paths['host'] . '/atum-nginx.conf');
@@ -60,6 +62,7 @@ try {
     expect($certificateStatus === 0, 'Generated TLS certificate is invalid.');
     expect(count(glob($paths['transaction'] . '/host-created-*') ?: []) === 4, 'Remote artefacts were not provisionally journalled.');
     $commands = (string) file_get_contents($temporary . '/services.log');
+    expect(substr_count($commands, '-t') >= 2, 'Native-style PHP-FPM and Nginx configuration validation did not run.');
     expect(str_contains($commands, 'reload nginx') && str_contains($commands, 'reload php8.3-fpm'), 'Required services were not reloaded.');
     expect(!preg_match('/\b(ufw|firewall-cmd|iptables|nft)\b/', $commands), 'A firewall command was executed.');
 
@@ -80,6 +83,7 @@ try {
         'web-config' => $apacheRoot . '/available/atum.conf', 'web-enable-link' => $apacheRoot . '/enabled/atum.conf',
         'web-service' => 'apache2', 'web-group' => 'www-data', 'fpm-config' => $apacheRoot . '/fpm/atum.conf',
         'fpm-socket' => '/run/php/atum-fpm.sock', 'fpm-service' => 'php8.3-fpm',
+        'fpm-binary' => $service, 'web-config-test-binary' => $service, 'web-config-test-argument' => 'configtest',
         'service-command' => $service, 'openssl' => '/usr/bin/openssl',
     ]);
     $apache = (string) file_get_contents($apacheRoot . '/available/atum.conf');
@@ -89,6 +93,27 @@ try {
     $apacheDeployment->rollback($service);
     expect(!is_link($apacheRoot . '/enabled/atum.conf') && !is_file($apacheRoot . '/available/atum.conf'), 'Apache rollback left Atum integration behind.');
 
+    $failureRoot = $temporary . '/validation-failure';
+    foreach (['transaction', 'config', 'state', 'host', 'fpm'] as $directory) { mkdir($failureRoot . '/' . $directory, 0700, true); }
+    $failedValidator = $failureRoot . '/reject-config';
+    file_put_contents($failedValidator, "#!/bin/sh\nexit 1\n"); chmod($failedValidator, 0700);
+    $failedDeployment = new AtumRemoteDeployment($failureRoot . '/transaction');
+    try {
+        $failedDeployment->install([
+            'target' => $failureRoot . '/application', 'state-dir' => $failureRoot . '/state', 'config-dir' => $failureRoot . '/config',
+            'listen-address' => '127.0.0.1', 'listen-port' => '10443', 'web-server' => 'nginx',
+            'web-config' => $failureRoot . '/host/atum.conf', 'web-enable-link' => '', 'web-service' => 'nginx', 'web-group' => 'www-data',
+            'fpm-config' => $failureRoot . '/fpm/atum.conf', 'fpm-socket' => '/run/php/atum-fpm.sock', 'fpm-service' => 'php-fpm',
+            'fpm-binary' => $failedValidator, 'web-config-test-binary' => $service, 'web-config-test-argument' => '-t',
+            'service-command' => $service, 'openssl' => '/usr/bin/openssl',
+        ]);
+        throw new RuntimeException('Invalid PHP-FPM configuration was accepted.');
+    } catch (RuntimeException $exception) {
+        expect(str_contains($exception->getMessage(), 'rejected'), 'Unexpected native validation failure.');
+        $failedDeployment->rollback($service);
+    }
+    expect(!is_file($failureRoot . '/fpm/atum.conf') && !is_file($failureRoot . '/host/atum.conf'), 'Validation failure rollback left host configuration behind.');
+
     $refusal = new AtumRemoteDeployment($paths['transaction']);
     try {
         $refusal->install([
@@ -97,6 +122,7 @@ try {
             'web-config' => $paths['host'] . '/atum-nginx.conf', 'web-enable-link' => '', 'web-service' => 'nginx',
             'web-group' => 'www-data', 'fpm-config' => $paths['host'] . '/second-fpm.conf',
             'fpm-socket' => '/run/php/atum-fpm.sock', 'fpm-service' => 'php8.3-fpm',
+            'fpm-binary' => $service, 'web-config-test-binary' => $service, 'web-config-test-argument' => '-t',
             'service-command' => $service, 'openssl' => '/usr/bin/openssl',
         ]);
         throw new RuntimeException('Pre-existing vhost configuration was overwritten.');

@@ -11,10 +11,43 @@ export ATUM_TRANSACTION_DIR="$TEST_ROOT/transaction"
 export ATUM_LIFECYCLE_LOCK_PATH="$TEST_ROOT/lifecycle-lock"
 export ATUM_ADMIN_USER=testadmin
 export ATUM_ADMIN_PASSWORD_FILE="$TEST_ROOT/password"
-cleanup() { if [ -f "$ATUM_CONFIG_DIR/install-ledger.json" ]; then php "$ROOT/uninstall.php" --config-dir="$ATUM_CONFIG_DIR" --yes --keep-dependencies >/dev/null 2>&1 || true; fi; rm -rf "$TEST_ROOT"; }
+cleanup() { if [ -f "$ATUM_CONFIG_DIR/install-ledger.json" ]; then php "$ROOT/uninstall.php" --config-dir="$ATUM_CONFIG_DIR" --yes --keep-dependencies >/dev/null 2>&1 || true; fi; [ ! -L /usr/local/sbin/atum ] || [ "$(readlink /usr/local/sbin/atum)" != "$ATUM_PREFIX/bin/atum" ] || unlink /usr/local/sbin/atum; [ ! -L /usr/local/sbin/atum-uninstall ] || [ "$(readlink /usr/local/sbin/atum-uninstall)" != "$ATUM_PREFIX/uninstall.php" ] || unlink /usr/local/sbin/atum-uninstall; rm -rf "$TEST_ROOT"; }
 trap cleanup EXIT HUP INT TERM
 printf '%s\n' 'Lifecycle test password 123' > "$ATUM_ADMIN_PASSWORD_FILE"
 install_id=0123456789abcdef0123456789abcdef
+
+# Recovery must never delete an atum identity it cannot prove it created: an
+# intended-* record alone describes a crash window, not proven ownership.
+ambiguity_dir="$TEST_ROOT/ambiguity-transaction"
+
+mkdir -m 0700 "$ambiguity_dir"
+printf '%s\n' "$install_id" > "$ambiguity_dir/install-id"
+printf '%s\n' 1 > "$ambiguity_dir/intended-user"
+groupadd atum
+useradd -r -g atum -s /usr/sbin/nologin -M atum
+if ATUM_TRANSACTION_DIR="$ambiguity_dir" "$ROOT/install" --development --allow-no-kamailio --no-deps --yes > "$TEST_ROOT/ambiguous-user.out" 2>&1; then
+    echo 'recovery removed an atum user it could not prove it created' >&2
+    exit 1
+fi
+grep -q 'cannot prove that it created the account' "$TEST_ROOT/ambiguous-user.out"
+id atum >/dev/null 2>&1
+userdel atum
+! getent group atum >/dev/null || groupdel atum
+rm -rf "$ambiguity_dir"
+
+mkdir -m 0700 "$ambiguity_dir"
+printf '%s\n' "$install_id" > "$ambiguity_dir/install-id"
+printf '%s\n' 1 > "$ambiguity_dir/intended-group"
+groupadd atum
+if ATUM_TRANSACTION_DIR="$ambiguity_dir" "$ROOT/install" --development --allow-no-kamailio --no-deps --yes > "$TEST_ROOT/ambiguous-group.out" 2>&1; then
+    echo 'recovery removed an atum group it could not prove it created' >&2
+    exit 1
+fi
+grep -q 'cannot prove that it created the group' "$TEST_ROOT/ambiguous-group.out"
+getent group atum >/dev/null
+groupdel atum
+rm -rf "$ambiguity_dir" "$ATUM_LIFECYCLE_LOCK_PATH"
+
 mkdir -m 0700 "$ATUM_TRANSACTION_DIR" "$ATUM_STATE_DIR"
 printf '%s\n' "$install_id" > "$ATUM_TRANSACTION_DIR/install-id"
 printf '%s\n' "$ATUM_PREFIX" > "$ATUM_TRANSACTION_DIR/application"
@@ -23,6 +56,13 @@ printf '%s\n' "$ATUM_CONFIG_DIR" > "$ATUM_TRANSACTION_DIR/configuration"
 printf '%s\n' 1 > "$ATUM_TRANSACTION_DIR/intended-state"
 printf '%s\n' "$install_id" > "$ATUM_STATE_DIR/.atum-provisional-install-id"
 printf '%s\n' fake-atum-dependency > "$ATUM_TRANSACTION_DIR/packages-added"
+ln -s "$ATUM_PREFIX/bin/atum" /usr/local/sbin/atum
+ln -s "$ATUM_PREFIX/uninstall.php" /usr/local/sbin/atum-uninstall
+printf '%s\n%s\n%s\n' symlink /usr/local/sbin/atum "$ATUM_PREFIX/bin/atum" > "$ATUM_TRANSACTION_DIR/host-created-cli"
+printf '%s\n%s\n%s\n' symlink /usr/local/sbin/atum-uninstall "$ATUM_PREFIX/uninstall.php" > "$ATUM_TRANSACTION_DIR/host-created-uninstall"
+partial_host_file="$TEST_ROOT/interrupted-host-config.partial"
+printf '%s\n' 'incomplete interrupted write' > "$partial_host_file"
+printf '%s\n%s\n' transient "$partial_host_file" > "$ATUM_TRANSACTION_DIR/host-created-partial"
 
 # A live lifecycle lock must prevent a second installer from mistaking the
 # transaction above for an interrupted operation.
@@ -40,6 +80,7 @@ flock -u 8
 # Once the interrupted process has released the lock, normal recovery remains
 # available and the installation can proceed.
 "$ROOT/install" --development --allow-no-kamailio --no-deps --yes
+[ ! -e "$partial_host_file" ]
 [ -f "$ATUM_CONFIG_DIR/install-ledger.json" ] && [ ! -d "$ATUM_TRANSACTION_DIR" ]
 grep -q 'fake-atum-dependency' "$ATUM_CONFIG_DIR/install-ledger.json"
 
@@ -82,6 +123,7 @@ export ATUM_WEB_SERVICE=nginx-test
 export ATUM_WEB_GROUP=atum
 export ATUM_SERVICE_COMMAND="$TEST_ROOT/bin/systemctl"
 export ATUM_FPM_BINARY="$TEST_ROOT/bin/php-fpm-test"
+export ATUM_WEB_CONFIG_TEST_BINARY="$TEST_ROOT/bin/php-fpm-test"
 mkdir -p "$TEST_ROOT/remote" "$TEST_ROOT/host/nginx" "$TEST_ROOT/host/fpm" "$TEST_ROOT/host/run" "$TEST_ROOT/bin"
 test_php_mm=$(php -r 'echo PHP_MAJOR_VERSION,".",PHP_MINOR_VERSION;')
 printf '%s\n' '#!/bin/sh' "echo \"PHP $test_php_mm.0 (fpm-fcgi)\"" > "$ATUM_FPM_BINARY"
@@ -113,6 +155,32 @@ grep -q "$ATUM_PREFIX/public" "$ATUM_NGINX_CONFIG_DIR/atum.conf"
 ! grep -q "$ATUM_PREFIX/admin" "$ATUM_NGINX_CONFIG_DIR/atum.conf"
 PATH="$TEST_ROOT/bin:$PATH" php "$ROOT/uninstall.php" --config-dir="$ATUM_CONFIG_DIR" --check > "$TEST_ROOT/remote-uninstall-check.out"
 grep -q "$ATUM_NGINX_CONFIG_DIR/atum.conf" "$TEST_ROOT/remote-uninstall-check.out"
+atum_cli_target=$(readlink /usr/local/sbin/atum)
+unlink /usr/local/sbin/atum
+ln -s "$TEST_ROOT/not-atum" /usr/local/sbin/atum
+
+if PATH="$TEST_ROOT/bin:$PATH" php "$ROOT/uninstall.php" --config-dir="$ATUM_CONFIG_DIR" --check > "$TEST_ROOT/remote-uninstall-cli-conflict.out" 2>&1; then
+    echo 'uninstall check accepted a changed Atum CLI link' >&2
+    exit 1
+fi
+
+grep -q 'Refusing to remove changed symlink' "$TEST_ROOT/remote-uninstall-cli-conflict.out"
+[ -f "$ATUM_CONFIG_DIR/tls/development.crt" ]
+[ -f "$ATUM_FPM_POOL_DIR/atum.conf" ]
+[ -f "$ATUM_NGINX_CONFIG_DIR/atum.conf" ]
+
+unlink /usr/local/sbin/atum
+ln -s "$atum_cli_target" /usr/local/sbin/atum
+cp "$ATUM_NGINX_CONFIG_DIR/atum.conf" "$TEST_ROOT/expected-nginx.conf"
+printf '%s\n' '# administrator-modified Atum vhost' > "$ATUM_NGINX_CONFIG_DIR/atum.conf"
+if PATH="$TEST_ROOT/bin:$PATH" php "$ROOT/uninstall.php" --config-dir="$ATUM_CONFIG_DIR" --yes --keep-dependencies > "$TEST_ROOT/remote-uninstall-conflict.out" 2>&1; then
+    echo 'uninstall removed a changed Atum host integration' >&2
+    exit 1
+fi
+grep -q 'changed after installation' "$TEST_ROOT/remote-uninstall-conflict.out"
+[ -f "$ATUM_CONFIG_DIR/tls/development.crt" ] && [ -f "$ATUM_CONFIG_DIR/tls/development.key" ]
+[ -f "$ATUM_FPM_POOL_DIR/atum.conf" ] && [ -f "$ATUM_NGINX_CONFIG_DIR/atum.conf" ]
+cp "$TEST_ROOT/expected-nginx.conf" "$ATUM_NGINX_CONFIG_DIR/atum.conf"
 PATH="$TEST_ROOT/bin:$PATH" php "$ROOT/uninstall.php" --config-dir="$ATUM_CONFIG_DIR" --yes --keep-dependencies >/dev/null
 [ ! -e "$ATUM_NGINX_CONFIG_DIR/atum.conf" ] && [ ! -e "$ATUM_FPM_POOL_DIR/atum.conf" ]
 [ -f "$TEST_ROOT/host/nginx/operator.conf" ]

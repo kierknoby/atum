@@ -20,7 +20,8 @@ final class AtumRemoteDeployment
     public function install(array $options): array
     {
         $required = ['target', 'config-dir', 'listen-address', 'listen-port', 'web-server',
-            'web-config', 'fpm-config', 'fpm-socket', 'fpm-service', 'web-service', 'web-group'];
+            'web-config', 'fpm-config', 'fpm-socket', 'fpm-service', 'web-service', 'web-group',
+            'fpm-binary', 'web-config-test-binary', 'web-config-test-argument'];
         foreach ($required as $key) {
             if (($options[$key] ?? '') === '') {
                 throw new RuntimeException('Remote deployment option is missing: ' . $key);
@@ -38,6 +39,15 @@ final class AtumRemoteDeployment
         }
         foreach (['target', 'state-dir', 'config-dir'] as $key) {
             $this->assertAbsoluteSafePath($options[$key]);
+        }
+        foreach (['fpm-binary', 'web-config-test-binary'] as $key) {
+            $this->assertAbsoluteSafePath($options[$key]);
+            if (!is_executable($options[$key])) {
+                throw new RuntimeException('Configuration validator is not executable: ' . $key);
+            }
+        }
+        if (!in_array($options['web-config-test-argument'], ['-t', 'configtest'], true)) {
+            throw new RuntimeException('Invalid web-server configuration-test argument.');
         }
         if (!preg_match('/^[A-Za-z0-9_.-]+$/', $options['web-group'])) {
             throw new RuntimeException('Invalid web-server group name.');
@@ -78,6 +88,9 @@ final class AtumRemoteDeployment
         if (($options['web-enable-link'] ?? '') !== '') {
             $this->createLink($options['web-enable-link'], $options['web-config']);
         }
+
+        $this->validateCommand($options['fpm-binary'], '-t', 'PHP-FPM');
+        $this->validateCommand($options['web-config-test-binary'], $options['web-config-test-argument'], ucfirst($options['web-server']));
 
         $this->reloadServices = array_values(array_unique([$options['fpm-service'], $options['web-service']]));
         foreach ($this->reloadServices as $index => $service) {
@@ -146,17 +159,101 @@ final class AtumRemoteDeployment
     private function createFile(string $path, string $contents, int $mode): void
     {
         $this->assertAbsoluteSafePath($path);
+
         if (file_exists($path) || is_link($path)) {
             throw new RuntimeException('Refusing to overwrite existing host configuration: ' . $path);
         }
-        if (!is_dir(dirname($path))) {
-            throw new RuntimeException('Required host configuration directory does not exist: ' . dirname($path));
+
+        $directory = dirname($path);
+        if (!is_dir($directory)) {
+            throw new RuntimeException('Required host configuration directory does not exist: ' . $directory);
         }
-        if (file_put_contents($path, $contents, LOCK_EX) === false) {
-            throw new RuntimeException('Unable to create host configuration: ' . $path);
+
+        // Construct the file completely under a private temporary name in the same
+        // directory. Recovery may remove this transient path regardless of content
+        // because it is journalled before creation and is never an operator file.
+        $temporary = $directory . '/.' . basename($path)
+            . '.atum-' . bin2hex(random_bytes(6)) . '.tmp';
+
+        $this->assertAbsoluteSafePath($temporary);
+        $transientRecord = $this->journalTransient($temporary);
+
+        $handle = @fopen($temporary, 'x');
+        if ($handle === false) {
+            @unlink($transientRecord);
+            throw new RuntimeException('Unable to create temporary host configuration for ' . $path);
         }
-        chmod($path, $mode);
-        $this->recordFile($path);
+
+        try {
+            $length = strlen($contents);
+            $written = 0;
+
+            while ($written < $length) {
+                $result = fwrite($handle, substr($contents, $written));
+                if ($result === false || $result === 0) {
+                    throw new RuntimeException('Unable to write temporary host configuration for ' . $path);
+                }
+                $written += $result;
+            }
+
+            if (!fflush($handle)) {
+                throw new RuntimeException('Unable to flush temporary host configuration for ' . $path);
+            }
+
+            if (function_exists('fsync') && !fsync($handle)) {
+                throw new RuntimeException('Unable to synchronise temporary host configuration for ' . $path);
+            }
+        } catch (Throwable $exception) {
+            fclose($handle);
+            if (@unlink($temporary) || !file_exists($temporary)) {
+                @unlink($transientRecord);
+            }
+            throw $exception;
+        }
+
+        fclose($handle);
+
+        if (!chmod($temporary, $mode)) {
+            if (@unlink($temporary) || !file_exists($temporary)) {
+                @unlink($transientRecord);
+            }
+            throw new RuntimeException('Unable to set host configuration permissions for ' . $path);
+        }
+
+        $entry = [
+            'type' => 'file',
+            'path' => $path,
+            'sha256' => hash('sha256', $contents),
+        ];
+
+        $this->created[] = $entry;
+
+        try {
+            $finalRecord = $this->journalEntry($entry);
+        } catch (Throwable $exception) {
+            array_pop($this->created);
+            if (@unlink($temporary) || !file_exists($temporary)) {
+                @unlink($transientRecord);
+            }
+            throw $exception;
+        }
+
+        // link() publishes the completed inode without overwriting an object that
+        // appeared at the destination between validation and publication.
+        if (!@link($temporary, $path)) {
+            array_pop($this->created);
+            @unlink($finalRecord);
+            if (@unlink($temporary) || !file_exists($temporary)) {
+                @unlink($transientRecord);
+            }
+            throw new RuntimeException('Unable or unwilling to publish host configuration: ' . $path);
+        }
+
+        if (!@unlink($temporary)) {
+            throw new RuntimeException('Unable to remove temporary host configuration for ' . $path);
+        }
+
+        @unlink($transientRecord);
     }
 
     private function recordFile(string $path): void
@@ -169,24 +266,50 @@ final class AtumRemoteDeployment
     private function createLink(string $path, string $target): void
     {
         $this->assertAbsoluteSafePath($path);
-        if (file_exists($path) || is_link($path) || !symlink($target, $path)) {
+        if (file_exists($path) || is_link($path)) {
             throw new RuntimeException('Unable or unwilling to create web-server enablement link: ' . $path);
         }
         $entry = ['type' => 'symlink', 'path' => $path, 'target' => $target];
         $this->created[] = $entry;
         $this->journalEntry($entry);
+        if (!symlink($target, $path)) {
+            throw new RuntimeException('Unable or unwilling to create web-server enablement link: ' . $path);
+        }
+    }
+
+    private function journalTransient(string $path): string
+    {
+        $record = $this->transactionDir . '/host-created-transient-' . bin2hex(random_bytes(6));
+        $temporary = $record . '.tmp';
+        $value = "transient\n{$path}\n\n";
+
+        if (file_put_contents($temporary, $value, LOCK_EX) === false || !rename($temporary, $record)) {
+            @unlink($temporary);
+            throw new RuntimeException('Unable to journal a transient remote deployment artefact.');
+        }
+
+        chmod($record, 0600);
+
+        return $record;
     }
 
     /** @param array{type:string,path:string,sha256?:string,target?:string} $entry */
-    private function journalEntry(array $entry): void
+    private function journalEntry(array $entry): string
     {
         $number = count($this->created);
-        $value = $entry['type'] . "\n" . $entry['path'] . "\n" . ($entry['sha256'] ?? $entry['target'] ?? '') . "\n";
+        $record = $this->transactionDir . '/host-created-' . $number;
         $temporary = $this->transactionDir . '/.host-created-' . $number . '.tmp';
-        if (file_put_contents($temporary, $value, LOCK_EX) === false || !rename($temporary, $this->transactionDir . '/host-created-' . $number)) {
+        $value = $entry['type'] . "\n" . $entry['path'] . "\n"
+            . ($entry['sha256'] ?? $entry['target'] ?? '') . "\n";
+
+        if (file_put_contents($temporary, $value, LOCK_EX) === false || !rename($temporary, $record)) {
+            @unlink($temporary);
             throw new RuntimeException('Unable to journal a remote deployment artefact.');
         }
-        chmod($this->transactionDir . '/host-created-' . $number, 0600);
+
+        chmod($record, 0600);
+
+        return $record;
     }
 
     private function service(string $command, string $action, string $service): void
@@ -197,6 +320,14 @@ final class AtumRemoteDeployment
         exec(escapeshellarg($command) . ' ' . $action . ' ' . escapeshellarg($service) . ' 2>&1', $output, $status);
         if ($status !== 0) {
             throw new RuntimeException('Unable to ' . $action . ' service ' . $service . '.');
+        }
+    }
+
+    private function validateCommand(string $command, string $argument, string $label): void
+    {
+        exec(escapeshellarg($command) . ' ' . escapeshellarg($argument) . ' 2>&1', $output, $status);
+        if ($status !== 0) {
+            throw new RuntimeException($label . ' rejected the generated configuration.');
         }
     }
 

@@ -48,6 +48,9 @@ $options = [
     'fpm-config' => '',
     'fpm-socket' => '',
     'fpm-service' => '',
+    'fpm-binary' => '',
+    'web-config-test-binary' => '',
+    'web-config-test-argument' => '',
     'service-command' => 'systemctl',
     'openssl' => 'openssl',
 ];
@@ -277,12 +280,14 @@ try {
     @chmod($target . '/uninstall', 0755);
     @chmod($target . '/uninstall.php', 0755);
 
+    journalWrite($transactionDir, 'host-created-cli', "symlink\n{$cliLink}\n{$target}/bin/atum\n");
     if (!symlink($target . '/bin/atum', $cliLink)) {
         throw new RuntimeException('Unable to create ' . $cliLink);
     }
     $cliCreated = true;
     $created[] = ['type' => 'symlink', 'path' => $cliLink, 'target' => $target . '/bin/atum'];
 
+    journalWrite($transactionDir, 'host-created-uninstall', "symlink\n{$uninstallLink}\n{$uninstallLinkTarget}\n");
     if (!symlink($uninstallLinkTarget, $uninstallLink)) {
         throw new RuntimeException('Unable to create ' . $uninstallLink);
     }
@@ -306,6 +311,9 @@ try {
             'fpm-config' => $options['fpm-config'],
             'fpm-socket' => $options['fpm-socket'],
             'fpm-service' => $options['fpm-service'],
+            'fpm-binary' => $options['fpm-binary'],
+            'web-config-test-binary' => $options['web-config-test-binary'],
+            'web-config-test-argument' => $options['web-config-test-argument'],
             'service-command' => $options['service-command'],
             'openssl' => $options['openssl'],
         ]);
@@ -313,7 +321,6 @@ try {
 
     $kamailioFiles = [];
     if ($kamailioConfig !== '' && is_readable($kamailioConfig)) {
-        require_once $target . '/admin/libraries/Atum/Kamailio/Scanner.class.php';
         $scan = (new AtumKamailioScanner())->scan($kamailioConfig);
         foreach ($scan['files'] as $file) {
             if (is_file($file) && is_readable($file)) {
@@ -393,8 +400,15 @@ try {
     echo "Kamailio configuration was not modified.\n";
 } catch (Throwable $e) {
     fwrite(STDERR, "Install failed: {$e->getMessage()}\n");
-    if ($cliCreated) { @unlink($cliLink); }
-    if ($uninstallCreated) { @unlink($uninstallLink); }
+    if ($cliCreated && is_link($cliLink)
+        && readlink($cliLink) === $target . '/bin/atum') {
+        @unlink($cliLink);
+    }
+
+    if ($uninstallCreated && is_link($uninstallLink)
+        && readlink($uninstallLink) === $uninstallLinkTarget) {
+        @unlink($uninstallLink);
+    }
     if ($remoteDeployment instanceof AtumRemoteDeployment) { $remoteDeployment->rollback($options['service-command']); }
     removeTree($stage);
     removeTree($target);
