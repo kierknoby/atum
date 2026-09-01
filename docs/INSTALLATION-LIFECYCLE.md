@@ -40,6 +40,8 @@ The default system paths are:
 /usr/local/sbin/atum-uninstall
 ```
 
+Remote mode additionally owns an individual Nginx/Apache vhost or drop-in, an individual PHP-FPM pool, an optional Apache enablement symlink, and generated certificate/key files under `/etc/atum/tls`. Each is provisionally journalled before installation commits and recorded with its hash or symlink target in the final ledger.
+
 Where possible, Atum should own complete directory trees rather than place individual files inside unrelated application directories.
 
 ## Installation Identifier
@@ -93,7 +95,7 @@ Before the transaction is committed, failure should remove safely reversible cha
 
 Installation must not leave a partially committed Atum tree and then rely on a later manual cleanup.
 
-Before the first host mutation, the installer creates a root-owned provisional transaction journal. Intended paths are recorded before creation and receive the same random provisional installation ID. Package deltas are reconciled after both successful and failed package-manager calls. A later installer recovers journal-owned paths and carries retained dependency ownership into the next committed ledger. Packages are retained when safe reverse-dependency removal cannot be proved.
+Before the first host mutation, the installer creates a root-owned provisional transaction journal. Intended paths are recorded before creation and receive the same random provisional installation ID. Remote host files are recorded with hashes or symlink targets as they are created. A later installer removes only matching interrupted-install artefacts and refuses to overwrite administrator changes. Package deltas are reconciled after both successful and failed package-manager calls. A later installer carries retained dependency ownership into the next committed ledger. Packages are retained when safe reverse-dependency removal cannot be proved.
 
 ## Existing Shared Host Files
 
@@ -127,7 +129,7 @@ Clean Atum removal is more important than removing a shared runtime package unsa
 
 Atum does not open firewall ports automatically.
 
-The v0.1 built-in server remains loopback-only. Any future network-facing deployment configuration must be an explicit Atum-owned integration recorded in the lifecycle ledger.
+The built-in server remains loopback-only. Explicit remote mode uses HTTPS on the selected host address/port through an existing Nginx or Apache and dedicated PHP-FPM pool. Atum never changes host or DigitalOcean firewall rules. The operator must permit the port manually and should restrict it to a trusted administration source IP or CIDR.
 
 ## Module Host Mutations
 
@@ -203,7 +205,7 @@ This is an operational restoration goal, not forensic erasure. Package-manager l
 
 ## Current Limitations
 
-- Full host integration beyond the current development installer is not production-supported.
+- Remote Nginx/Apache and PHP-FPM integration is systemd/Linux-only development-test functionality and is not production-supported.
 - RPM-family dependency removal is intentionally conservative and retains Atum-added packages in v0.1.
 - Module-owned host mutation registration is not implemented, so modules must not perform such changes.
 - Clean removal cannot safely undo untracked manual changes made outside the Atum lifecycle mechanism.

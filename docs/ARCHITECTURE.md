@@ -144,7 +144,7 @@ Enabled modules expose supported browser assets through `public/module-asset.php
 
 State-changing browser actions require authentication, permission checks, POST and CSRF validation.
 
-The built-in PHP server is for development only and is restricted to loopback.
+The built-in PHP server is for local development only and is restricted to loopback. Explicit Linux remote-development installation uses a dedicated Nginx/Apache TLS vhost whose document root is `public/` and a dedicated PHP-FPM pool running as `atum`. It does not use or expose the built-in server, and it does not trust public proxy headers for scheme or client identity.
 
 ## Authentication and Roles
 
@@ -177,6 +177,6 @@ Host artefacts created for Atum must be recorded by the installation lifecycle m
 - Discovery is not a complete Kamailio parser.
 - Arbitrary KEMI/routing semantics are not understood.
 - No privileged write helper exists.
-- No production web deployment is defined.
+- Remote web deployment is development-test-only; no production web deployment is defined.
 - No module signing/trust model exists.
 - No supported host-mutation API exists for individual Atum modules.

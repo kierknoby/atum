@@ -2,7 +2,7 @@
 
 **NOT SUITABLE FOR PRODUCTION.**
 
-Atum v0.1 is an early development preview. Do not install it on a production Kamailio host, expose it directly to the Internet, or rely on Atum authentication as a production security boundary.
+Atum v0.1 is an early development preview. Do not install it on a production Kamailio host or rely on Atum authentication as a production security boundary. Remote development mode is Internet-reachable only when the operator deliberately permits it and remains unsuitable for production.
 
 ## Supported Versions
 
@@ -29,9 +29,9 @@ sudo ./install --development
 For browser access:
 
 - use the built-in server on loopback only;
-- use an SSH tunnel for remote testing;
+- use an SSH tunnel, or the explicit `sudo ./install --development --remote` Linux test-host mode;
 - do not bind the development server directly to a LAN or WAN interface;
-- do not expose Atum directly to the Internet;
+- restrict remote mode's HTTPS port at both host and cloud firewalls to a trusted administration IP/CIDR;
 - keep an independent backup of the test Kamailio host.
 
 ## Trust Boundaries
@@ -89,6 +89,8 @@ The current framework provides:
 - rejection of insecure non-loopback HTTP requests;
 - loopback-only enforcement for the built-in PHP development server.
 
+Remote mode terminates TLS directly in its dedicated Nginx/Apache vhost, passes PHP only to a dedicated `atum` PHP-FPM pool, and sets `HTTPS` at that local boundary. The application does not trust Internet-supplied `Forwarded` or `X-Forwarded-*` headers. Session cookies are Secure, HttpOnly and SameSite=Strict over that path. Plain HTTP is rejected before a session starts.
+
 ## Secret Handling
 
 Discovery fails closed for parameter and define values. A small positive classification permits non-secret scalar tuning values; other values are redacted before information reaches the GUI, AJAX response or CLI output.
@@ -140,7 +142,9 @@ Important controls include:
 
 - The Kamailio configuration scanner is incomplete and line-oriented in important areas.
 - Arbitrary Kamailio/KEMI logic is not semantically interpreted.
-- No supported production PHP-FPM/web-server deployment exists.
+- The Nginx/Apache + PHP-FPM remote path is development-test coverage, not a supported production deployment.
+- Its generated 30-day self-signed certificate encrypts traffic but does not establish trusted server identity.
+- Atum does not configure a host or DigitalOcean firewall; an unrestricted public port materially increases development-preview risk.
 - No privileged Kamailio write path exists.
 - No third-party module signing/trust system exists.
 - The project has not undergone an independent penetration test or source-code security audit.

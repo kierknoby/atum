@@ -23,6 +23,7 @@ admin/libraries/Atum/Lifecycle.class.php
 admin/libraries/Atum/Audit.class.php
 admin/libraries/Atum/Auth.class.php
 admin/libraries/Atum/Security.class.php
+admin/libraries/Atum/RemoteDeployment.class.php
 admin/libraries/Atum/Manifest.class.php
 admin/libraries/Atum/Modules.class.php
 admin/libraries/Atum/Ajax.class.php

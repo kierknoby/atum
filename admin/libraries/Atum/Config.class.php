@@ -13,9 +13,10 @@ final class AtumConfig
 
     public function __construct()
     {
+        $configDirectory = getenv('ATUM_CONFIG_DIR') ?: '/etc/atum';
         $files = [
             ATUM_ROOT . '/config/atum.conf',
-            '/etc/atum/atum.conf',
+            rtrim($configDirectory, '/') . '/atum.conf',
         ];
 
         foreach ($files as $file) {

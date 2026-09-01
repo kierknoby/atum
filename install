@@ -17,6 +17,10 @@ PACKAGES_ADDED=""
 ASSUME_YES=0
 ALLOW_NO_KAMAILIO=0
 DEVELOPMENT_ACK=0
+REMOTE_MODE=0
+LISTEN_ADDRESS=0.0.0.0
+LISTEN_PORT=8443
+WEB_SERVER_REQUEST=""
 TRANSACTION_DIR="${ATUM_TRANSACTION_DIR:-/var/lib/atum-install-transaction}"
 RECOVERED_PACKAGES=""
 
@@ -33,6 +37,10 @@ Usage: ./install [options]
   --kamailio-config=/path     existing Kamailio configuration
   --allow-no-kamailio         development install without Kamailio
   --development               acknowledge v0.1 is NOT SUITABLE FOR PRODUCTION
+  --remote                    configure supported host web server + PHP-FPM + HTTPS
+  --listen-address=address    remote listen IP (default 0.0.0.0)
+  --listen-port=port          remote HTTPS port (default 8443)
+  --web-server=name           nginx or apache (auto-detected by default)
   --help, -h                  show this help
 EOF
 }
@@ -46,6 +54,10 @@ for arg in "$@"; do
         --kamailio-config=*) KAMAILIO_CONFIG=${arg#--kamailio-config=} ;;
         --allow-no-kamailio) ALLOW_NO_KAMAILIO=1 ;;
         --development) DEVELOPMENT_ACK=1 ;;
+        --remote) REMOTE_MODE=1 ;;
+        --listen-address=*) LISTEN_ADDRESS=${arg#--listen-address=} ;;
+        --listen-port=*) LISTEN_PORT=${arg#--listen-port=} ;;
+        --web-server=*) WEB_SERVER_REQUEST=${arg#--web-server=} ;;
         --help|-h) usage; exit 0 ;;
         *) echo "Unknown option: $arg" >&2; usage >&2; exit 2 ;;
     esac
@@ -75,10 +87,75 @@ for pm in apt-get dnf yum zypper apk pkg brew; do
 done
 
 WEB_SERVER=none
-if command -v apache2 >/dev/null 2>&1 || command -v httpd >/dev/null 2>&1; then
+if [ -n "$WEB_SERVER_REQUEST" ]; then
+    case "$WEB_SERVER_REQUEST" in nginx|apache) WEB_SERVER=$WEB_SERVER_REQUEST ;; *) fail "--web-server must be nginx or apache." ;; esac
+elif [ -n "${ATUM_WEB_SERVER:-}" ]; then
+    case "$ATUM_WEB_SERVER" in nginx|apache|none) WEB_SERVER=$ATUM_WEB_SERVER ;; *) fail "ATUM_WEB_SERVER must be nginx, apache or none." ;; esac
+elif command -v apache2 >/dev/null 2>&1 || command -v httpd >/dev/null 2>&1; then
     WEB_SERVER=apache
 elif command -v nginx >/dev/null 2>&1; then
     WEB_SERVER=nginx
+fi
+
+FPM_BINARY=""
+FPM_VERSION=""
+FPM_CONFIG=""
+FPM_SOCKET="${ATUM_FPM_SOCKET:-}"
+FPM_SERVICE=""
+WEB_SERVICE=""
+WEB_GROUP=""
+WEB_CONFIG=""
+WEB_ENABLE_LINK=""
+SERVICE_COMMAND="${ATUM_SERVICE_COMMAND:-systemctl}"
+if [ "$REMOTE_MODE" -eq 1 ]; then
+    [ "$DEVELOPMENT_ACK" -eq 1 ] || fail "Remote access requires the explicit --development acknowledgement."
+    [ "$KERNEL" = Linux ] || fail "Remote development deployment is currently supported only on Linux."
+    command -v systemctl >/dev/null 2>&1 || fail "Remote development currently requires a systemd-managed Linux host."
+    case "$LISTEN_ADDRESS" in *[!0-9a-fA-F:.]*|'') fail "--listen-address must be a literal IPv4 or IPv6 address." ;; esac
+    php -r 'exit(filter_var($argv[1], FILTER_VALIDATE_IP) === false ? 1 : 0);' "$LISTEN_ADDRESS" >/dev/null 2>&1 || fail "--listen-address must be a valid literal IPv4 or IPv6 address."
+    case "$LISTEN_PORT" in *[!0-9]*|'') fail "--listen-port must be an integer from 1 to 65535." ;; esac
+    [ "$LISTEN_PORT" -ge 1 ] 2>/dev/null && [ "$LISTEN_PORT" -le 65535 ] || fail "--listen-port must be an integer from 1 to 65535."
+    command -v openssl >/dev/null 2>&1 || fail "Remote development requires the openssl command to generate its development certificate."
+    [ "$WEB_SERVER" != none ] || fail "Remote development requires an existing supported web server (Nginx or Apache). None was detected."
+    if [ "$WEB_SERVER" = nginx ]; then command -v nginx >/dev/null 2>&1 || [ "${ATUM_WEB_SERVER:-}" = nginx ] || fail "Nginx was selected but is not installed."
+    else { command -v apache2 >/dev/null 2>&1 || command -v httpd >/dev/null 2>&1 || [ "${ATUM_WEB_SERVER:-}" = apache ]; } || fail "Apache was selected but is not installed."; fi
+    PHP_MM=$(php -r 'echo PHP_MAJOR_VERSION,".",PHP_MINOR_VERSION;' 2>/dev/null || true)
+    [ -n "$PHP_MM" ] || fail "Remote development requires a working PHP 8.2 or newer CLI and matching PHP-FPM."
+    FPM_BINARY=${ATUM_FPM_BINARY:-}
+    if [ -z "$FPM_BINARY" ]; then
+        for candidate in "php-fpm$PHP_MM" "php-fpm${PHP_MM%.*}" php-fpm; do
+            FPM_BINARY=$(command -v "$candidate" 2>/dev/null || true); [ -z "$FPM_BINARY" ] || break
+        done
+    fi
+    [ -n "$FPM_BINARY" ] || fail "Remote development requires PHP-FPM matching the selected PHP. Install it and rerun; Atum will not install a web stack automatically."
+    FPM_VERSION=$($FPM_BINARY -v 2>&1 | sed -n 's/^PHP \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -n1)
+    [ -n "$FPM_VERSION" ] || FPM_VERSION=$PHP_MM
+    [ "$FPM_VERSION" = "$PHP_MM" ] || fail "PHP-FPM $FPM_VERSION does not match the selected PHP CLI $PHP_MM."
+    if [ -n "${ATUM_FPM_POOL_DIR:-}" ]; then FPM_POOL_DIR=$ATUM_FPM_POOL_DIR
+    elif [ -d "/etc/php/$FPM_VERSION/fpm/pool.d" ]; then FPM_POOL_DIR="/etc/php/$FPM_VERSION/fpm/pool.d"
+    elif [ -d /etc/php-fpm.d ]; then FPM_POOL_DIR=/etc/php-fpm.d
+    else fail "Unable to locate the existing PHP-FPM pool configuration directory."; fi
+    FPM_CONFIG="$FPM_POOL_DIR/atum.conf"
+    if [ "$FPM_POOL_DIR" = /etc/php-fpm.d ]; then
+        FPM_SERVICE="${ATUM_FPM_SERVICE:-php-fpm}"; FPM_SOCKET=${FPM_SOCKET:-/run/php-fpm/atum-fpm.sock}
+    else
+        FPM_SERVICE="${ATUM_FPM_SERVICE:-php$FPM_VERSION-fpm}"; FPM_SOCKET=${FPM_SOCKET:-/run/php/atum-fpm.sock}
+    fi
+    if [ "$WEB_SERVER" = nginx ]; then
+        NGINX_DIR=${ATUM_NGINX_CONFIG_DIR:-/etc/nginx/conf.d}
+        [ -d "$NGINX_DIR" ] || fail "Nginx configuration directory is unavailable: $NGINX_DIR"
+        WEB_CONFIG="$NGINX_DIR/atum.conf"; WEB_SERVICE=${ATUM_WEB_SERVICE:-nginx}
+        if getent group www-data >/dev/null 2>&1; then WEB_GROUP=www-data; else WEB_GROUP=${ATUM_WEB_GROUP:-nginx}; fi
+    else
+        if [ -n "${ATUM_APACHE_CONFIG_DIR:-}" ]; then APACHE_DIR=$ATUM_APACHE_CONFIG_DIR
+        elif [ -d /etc/apache2/sites-available ]; then APACHE_DIR=/etc/apache2/sites-available
+        elif [ -d /etc/httpd/conf.d ]; then APACHE_DIR=/etc/httpd/conf.d
+        else fail "Unable to locate a supported Apache vhost configuration directory."; fi
+        WEB_CONFIG="$APACHE_DIR/atum.conf"
+        if [ "$APACHE_DIR" = /etc/httpd/conf.d ]; then WEB_SERVICE=${ATUM_WEB_SERVICE:-httpd}; else WEB_SERVICE=${ATUM_WEB_SERVICE:-apache2}; fi
+        if [ "$APACHE_DIR" = /etc/apache2/sites-available ]; then WEB_ENABLE_LINK="${ATUM_APACHE_ENABLED_DIR:-/etc/apache2/sites-enabled}/atum.conf"; fi
+        if getent group www-data >/dev/null 2>&1; then WEB_GROUP=www-data; else WEB_GROUP=${ATUM_WEB_GROUP:-apache}; fi
+    fi
 fi
 
 SERVICE_MANAGER=unknown
@@ -142,7 +219,7 @@ say "WARNING          : DEVELOPMENT PREVIEW - NOT SUITABLE FOR PRODUCTION"
 say "Operating system : $OS_NAME"
 say "Package manager  : ${PKG_MANAGER:-not detected}"
 say "Service manager  : $SERVICE_MANAGER"
-say "Web server       : $WEB_SERVER (Atum does not configure it in v0.1)"
+say "Web server       : $WEB_SERVER$([ "$REMOTE_MODE" -eq 1 ] && printf '%s' ' (remote development configuration requested)' || true)"
 say "PHP              : $PHP_VERSION (minimum $ATUM_MIN_PHP)"
 say "Missing PHP ext  : ${MISSING_EXT:-none}"
 say "Kamailio binary  : ${KAMAILIO_BINARY:-not found}"
@@ -152,12 +229,14 @@ say "DB schemes seen  : ${DB_SCHEMES:-none/unknown}"
 say "Application      : $PREFIX"
 say "State            : $STATE_DIR"
 say "Configuration    : $CONFIG_DIR"
+[ "$REMOTE_MODE" -eq 0 ] || say "Remote HTTPS     : $LISTEN_ADDRESS:$LISTEN_PORT"
 say ""
 
 if [ "$CHECK_ONLY" -eq 1 ]; then
     [ "$PHP_OK" -eq 1 ] || exit 1
     [ -z "$MISSING_EXT" ] || exit 1
     [ -n "$KAMAILIO_CONFIG" ] || [ "$ALLOW_NO_KAMAILIO" -eq 1 ] || exit 1
+    [ "$REMOTE_MODE" -eq 0 ] || { [ "$WEB_SERVER" != none ] && [ -n "$FPM_BINARY" ]; } || exit 1
     exit 0
 fi
 
@@ -184,6 +263,26 @@ recover_transaction() {
         return 0
     fi
     say "Recovering interrupted Atum installation $old_id"
+    for record in "$TRANSACTION_DIR"/host-created-*; do
+        [ -f "$record" ] || continue
+        kind=$(sed -n '1p' "$record"); old_path=$(sed -n '2p' "$record"); expected=$(sed -n '3p' "$record")
+        case "$old_path" in /*) ;; *) fail "Interrupted-install journal contains an unsafe host path." ;; esac
+        [ "$old_path" != / ] || fail "Interrupted-install journal contains an unsafe host path."
+        if [ "$kind" = file ] && [ -f "$old_path" ]; then
+            actual=$(sha256sum "$old_path" | awk '{print $1}')
+            [ "$actual" = "$expected" ] || fail "Interrupted Atum host file changed; refusing to remove it: $old_path"
+            rm -f "$old_path"
+        elif [ "$kind" = symlink ] && [ -L "$old_path" ]; then
+            [ "$(readlink "$old_path")" = "$expected" ] || fail "Interrupted Atum host symlink changed; refusing to remove it: $old_path"
+            rm -f "$old_path"
+        fi
+    done
+    for record in "$TRANSACTION_DIR"/reload-service-*; do
+        [ -f "$record" ] || continue
+        old_service=$(sed -n '1p' "$record")
+        case "$old_service" in *[!A-Za-z0-9@_.-]*|'') fail "Interrupted-install journal contains an invalid service name." ;; esac
+        "$SERVICE_COMMAND" reload "$old_service" >/dev/null 2>&1 || fail "Unable to reload $old_service while recovering interrupted remote installation."
+    done
     for key in application-stage application state configuration; do
         [ -f "$TRANSACTION_DIR/intended-$key" ] || [ -f "$TRANSACTION_DIR/created-$key" ] || continue
         old_path=$(sed -n '1p' "$TRANSACTION_DIR/$key")
@@ -331,7 +430,20 @@ ATUM_INSTALL_BOOTSTRAPPED=1 php "$SOURCE_DIR/install.php" \
     --user-created="$USER_CREATED" \
     --group-created="$GROUP_CREATED" \
     --install-id="$INSTALL_ID" \
-    --transaction-dir="$TRANSACTION_DIR"
+    --transaction-dir="$TRANSACTION_DIR" \
+    --remote="$REMOTE_MODE" \
+    --listen-address="$LISTEN_ADDRESS" \
+    --listen-port="$LISTEN_PORT" \
+    --web-server="$WEB_SERVER" \
+    --web-config="$WEB_CONFIG" \
+    --web-enable-link="$WEB_ENABLE_LINK" \
+    --web-service="$WEB_SERVICE" \
+    --web-group="$WEB_GROUP" \
+    --fpm-config="$FPM_CONFIG" \
+    --fpm-socket="$FPM_SOCKET" \
+    --fpm-service="$FPM_SERVICE" \
+    --service-command="$SERVICE_COMMAND" \
+    --openssl="$(command -v openssl 2>/dev/null || true)"
 
 INSTALL_COMMITTED=1
 find "$TRANSACTION_DIR" -mindepth 1 -maxdepth 1 -type f -exec rm -f {} \;
@@ -339,6 +451,21 @@ rmdir "$TRANSACTION_DIR"
 
 say ""
 say "Atum installed without modifying Kamailio."
-say "Run for local testing: sudo -u atum atum serve"
-say "For remote testing, tunnel 127.0.0.1:8090 over SSH. Do not expose v0.1 directly to a network."
+if [ "$REMOTE_MODE" -eq 1 ]; then
+    say ""
+    say "Atum remote development installation complete."
+    say "Web server      : $WEB_SERVER"
+    say "PHP-FPM        : dedicated Atum pool"
+    say "HTTPS          : enabled using an Atum-generated self-signed development certificate"
+    say "Listen address : $LISTEN_ADDRESS"
+    say "Listen port    : $LISTEN_PORT"
+    say "Installed at   : $PREFIX"
+    say "Open           : https://PUBLIC_IP:$LISTEN_PORT/"
+    say "Your browser will warn because the certificate is self-signed and does not provide trusted identity verification."
+    say "No firewall rules were changed. Permit TCP/$LISTEN_PORT only from your trusted administration address or network."
+    say "NOT SUITABLE FOR PRODUCTION."
+else
+    say "Run for local testing: sudo -u atum atum serve"
+    say "For remote testing, install explicitly with --development --remote. The built-in server remains loopback-only."
+fi
 say "Run: atum-uninstall --check to preview complete removal."

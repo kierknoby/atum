@@ -146,7 +146,7 @@ switch ($command) {
             $host = $separator === false ? $bind : substr($bind, 0, $separator);
         }
         if (!in_array($host, ['127.0.0.1', 'localhost', '::1'], true)) {
-            fwrite(STDERR, "The development server is loopback-only by policy. Use an SSH tunnel for remote testing; v0.1 has no supported network deployment.\n");
+            fwrite(STDERR, "The built-in development server is loopback-only by policy. Use an SSH tunnel or install the separate HTTPS remote-development mode; never expose PHP's built-in server.\n");
             exit(1);
         }
         echo "WARNING: Atum v0.1 is a development preview and NOT SUITABLE FOR PRODUCTION.\n";

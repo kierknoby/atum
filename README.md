@@ -2,7 +2,7 @@
 
 **NOT SUITABLE FOR PRODUCTION.**
 
-Atum v0.1 is an early development preview. Do not install it on a production Kamailio host, expose it directly to the Internet, or rely on it as a security boundary. Use a disposable test system or a non-production Kamailio installation.
+Atum v0.1 is an early development preview. Do not install it on a production Kamailio host or rely on it as a production security boundary. Remote mode is solely for deliberately restricted access to a disposable test system or non-production Kamailio installation.
 
 ## Overview
 
@@ -23,7 +23,7 @@ Current limitations include:
 - Kamailio management is read-only.
 - The configuration scanner recognises a limited subset of Kamailio configuration and is not a complete parser.
 - Arbitrary Kamailio or KEMI routing logic is not semantically interpreted.
-- No supported production web-server or PHP-FPM deployment is provided.
+- Remote development deployment supports an existing Linux Nginx or Apache installation and existing PHP-FPM; no production deployment is provided.
 - No privileged Kamailio write path exists.
 - Third-party Atum modules have no signing or trust system.
 - The project has not undergone an independent security audit or penetration test.
@@ -62,6 +62,8 @@ For a normal development installation:
 
 The built-in development web server requires no separate Apache or Nginx configuration.
 
+Remote development testing additionally requires a systemd-managed Linux host, an existing Nginx or Apache installation, matching PHP-FPM, and the `openssl` command. Atum does not install an unrelated web stack automatically.
+
 ## Installing
 
 **Do not run the v0.1 installer on a production Kamailio system.**
@@ -90,6 +92,10 @@ Available installer options:
 --kamailio-config=/path     use an explicit Kamailio configuration
 --allow-no-kamailio         development install without Kamailio
 --development               acknowledge that v0.1 is not suitable for production
+--remote                    configure explicit remote development HTTPS access
+--listen-address=address    listen IP for remote mode (default 0.0.0.0)
+--listen-port=port          HTTPS port for remote mode (default 8443)
+--web-server=name           select nginx or apache when both are installed
 ```
 
 The installer does not install, replace or reconfigure Kamailio.
@@ -109,6 +115,30 @@ During installation it:
 - refuses to overwrite an existing Atum application, configuration or state tree.
 
 Database schemes discovered in Kamailio configuration are reported for capability detection. Database-specific PHP drivers are not installed merely because Kamailio uses that database; an Atum module must declare a driver when it actually requires one.
+
+## Remote Development Test Installation
+
+**NOT SUITABLE FOR PRODUCTION.**
+
+On a non-production Linux host that already has Kamailio, Nginx or Apache, and matching PHP-FPM:
+
+```sh
+sudo ./install --check
+sudo ./install --development --remote
+```
+
+Remote mode creates an Atum-specific vhost/drop-in, a dedicated PHP-FPM pool running as `atum`, and a 30-day self-signed development certificate. It exposes only `/usr/share/atum/public`, requires HTTPS, and defaults to `0.0.0.0:8443`. Override the literal listen IP or port with `--listen-address=...` and `--listen-port=...`.
+
+Open `https://PUBLIC_IP:8443/`. The browser will warn because the generated certificate is self-signed; encryption is provided, but trusted server identity is not. Atum does not discover the public IP and does not change UFW, firewalld, iptables, nftables or a DigitalOcean Cloud Firewall. Permit the selected TCP port manually only from the trusted public source IP or CIDR used for administration.
+
+Preview and remove the complete Atum-owned deployment with:
+
+```sh
+sudo atum-uninstall --check
+sudo atum-uninstall
+```
+
+Removal deletes only ledger-recorded Atum files whose ownership/content still matches, reloads the existing shared services, and leaves Kamailio and pre-existing web/PHP installations in place.
 
 ## Repository-local Development
 
@@ -134,13 +164,13 @@ Open:
 http://127.0.0.1:8090
 ```
 
-For remote development access, use an SSH tunnel rather than exposing the development server directly:
+For remote access through the loopback development server, use an SSH tunnel:
 
 ```sh
 ssh -L 8090:127.0.0.1:8090 user@kamailio-host
 ```
 
-Atum rejects insecure non-loopback HTTP requests. This is a development safeguard and does not make the built-in server suitable for production use.
+`atum serve` continues to reject every non-loopback bind. Remote installation uses the host web server and PHP-FPM; it never publishes PHP's built-in server.
 
 ## Current Modules
 

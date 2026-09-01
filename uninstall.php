@@ -137,6 +137,13 @@ if ($packages && in_array((string) ($ledger['package_manager'] ?? ''), ['dnf', '
 }
 echo "Packages added  : {$packageSummary}\n";
 echo "Kamailio        : untouched by installation; no Kamailio files will be removed or restored\n";
+$remote = is_array($ledger['remote_development'] ?? null) ? $ledger['remote_development'] : null;
+if ($remote !== null) {
+    echo "Remote access   : remove Atum " . ($remote['web_server'] ?? 'web-server') . " vhost, dedicated PHP-FPM pool and generated TLS material\n";
+    foreach (($ledger['host_integrations']['created_files'] ?? []) as $entry) {
+        echo "  remove        : " . ($entry['path'] ?? '[invalid ledger path]') . "\n";
+    }
+}
 
 if ($checkOnly) {
     exit(0);
@@ -160,14 +167,6 @@ foreach (($ledger['host_integrations']['services'] ?? []) as $service) {
         if ($serviceStatus !== 0) {
             throw new RuntimeException('Unable to stop Atum service: ' . $service);
         }
-    }
-}
-
-if (($account['user_created'] ?? false) && commandExists('ps')) {
-    $processes = trim((string) shell_exec('ps -u atum -o pid= 2>/dev/null'));
-    if ($processes !== '') {
-        fwrite(STDERR, "Atum processes are still running; refusing to begin removal.\n");
-        exit(1);
     }
 }
 
@@ -199,14 +198,45 @@ foreach (($ledger['host_integrations']['modified_files'] ?? []) as $entry) {
 
 foreach (($ledger['host_integrations']['created_files'] ?? []) as $entry) {
     $path = (string) ($entry['path'] ?? '');
+    $type = (string) ($entry['type'] ?? 'file');
     $expectedHash = (string) ($entry['sha256'] ?? '');
-    if ($path === '' || !is_file($path)) {
+    if ($path === '') {
         continue;
     }
-    if ($expectedHash !== '' && !hash_equals($expectedHash, (string) hash_file('sha256', $path))) {
-        throw new RuntimeException('Atum-created host file was changed after installation; refusing to delete it: ' . $path);
+    if ($type === 'symlink') {
+        if (!is_link($path)) { continue; }
+        if (readlink($path) !== (string) ($entry['target'] ?? '')) {
+            throw new RuntimeException('Atum-created host symlink was changed after installation; refusing to delete it: ' . $path);
+        }
+    } else {
+        if (!is_file($path)) { continue; }
+        if ($expectedHash !== '' && !hash_equals($expectedHash, (string) hash_file('sha256', $path))) {
+            throw new RuntimeException('Atum-created host file was changed after installation; refusing to delete it: ' . $path);
+        }
     }
     unlink($path);
+}
+
+// Shared services are reloaded, never removed. A failed reload leaves the
+// ledger intact and uninstall can be retried after the host issue is fixed.
+foreach (($ledger['host_integrations']['reload_services'] ?? []) as $service) {
+    if (!is_string($service) || !preg_match('/^[A-Za-z0-9@_.-]+$/', $service)) {
+        throw new RuntimeException('Invalid reload service name in install ledger.');
+    }
+    if (commandExists('systemctl')) {
+        passthru('systemctl reload ' . escapeshellarg($service), $reloadStatus);
+        if ($reloadStatus !== 0) {
+            throw new RuntimeException('Unable to reload host service after removing Atum integration: ' . $service);
+        }
+    }
+}
+
+if (($account['user_created'] ?? false) && commandExists('ps')) {
+    $processes = trim((string) shell_exec('ps -u atum -o pid= 2>/dev/null'));
+    if ($processes !== '') {
+        fwrite(STDERR, "Atum processes remain after disabling host integration; retaining the ledger so removal can be retried.\n");
+        exit(1);
+    }
 }
 
 // Remove only symlinks that still point at the paths Atum created.

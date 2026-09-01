@@ -33,6 +33,7 @@ jobs:
         run: >-
           php -r 'exit(extension_loaded("pdo_sqlite") ? 0 : 1);'
       - run: php utests/run.php
+      - run: php utests/remote-deployment.php
       - run: sh utests/http.sh
       - run: ./install --check --allow-no-kamailio
       - if: ${{ matrix.php == '8.3' }}

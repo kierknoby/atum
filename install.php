@@ -37,6 +37,19 @@ $options = [
     'group-created' => '0',
     'install-id' => '',
     'transaction-dir' => '/var/lib/atum-install-transaction',
+    'remote' => '0',
+    'listen-address' => '',
+    'listen-port' => '',
+    'web-server' => '',
+    'web-config' => '',
+    'web-enable-link' => '',
+    'web-service' => '',
+    'web-group' => '',
+    'fpm-config' => '',
+    'fpm-socket' => '',
+    'fpm-service' => '',
+    'service-command' => 'systemctl',
+    'openssl' => 'openssl',
 ];
 foreach (array_slice($argv, 1) as $arg) {
     if (!str_starts_with($arg, '--') || !str_contains($arg, '=')) {
@@ -64,6 +77,8 @@ $uninstallCreated = false;
 $installId = $options['install-id'];
 if (!preg_match('/^[a-f0-9]{32}$/', $installId)) { throw new RuntimeException('Invalid provisional installation ID.'); }
 $transactionDir = rtrim($options['transaction-dir'], '/');
+$remoteDeployment = null;
+$remoteIntegration = null;
 
 $kamailioSnapshot = [];
 $snapshotScope = ['scope' => 'no Kamailio configuration selected', 'confidence' => 'none', 'effective_configuration_proven' => false];
@@ -218,7 +233,7 @@ try {
         . "ATUM_READ_ONLY=true\n"
         . "ATUM_BIND=\"127.0.0.1:8090\"\n"
         . "# Non-loopback plain HTTP is rejected regardless. Set true to require HTTPS even on loopback.\n"
-        . "ATUM_REQUIRE_HTTPS=false\n";
+        . "ATUM_REQUIRE_HTTPS=" . ($options['remote'] === '1' ? 'true' : 'false') . "\n";
     if (file_put_contents($configDir . '/atum.conf', $config, LOCK_EX) === false) {
         throw new RuntimeException('Unable to write Atum configuration.');
     }
@@ -274,6 +289,28 @@ try {
     $uninstallCreated = true;
     $created[] = ['type' => 'symlink', 'path' => $uninstallLink, 'target' => $uninstallLinkTarget];
 
+    if ($options['remote'] === '1') {
+        require_once $target . '/admin/libraries/Atum/RemoteDeployment.class.php';
+        $remoteDeployment = new AtumRemoteDeployment($transactionDir);
+        $remoteIntegration = $remoteDeployment->install([
+            'target' => $target,
+            'state-dir' => $stateDir,
+            'config-dir' => $configDir,
+            'listen-address' => $options['listen-address'],
+            'listen-port' => $options['listen-port'],
+            'web-server' => $options['web-server'],
+            'web-config' => $options['web-config'],
+            'web-enable-link' => $options['web-enable-link'],
+            'web-service' => $options['web-service'],
+            'web-group' => $options['web-group'],
+            'fpm-config' => $options['fpm-config'],
+            'fpm-socket' => $options['fpm-socket'],
+            'fpm-service' => $options['fpm-service'],
+            'service-command' => $options['service-command'],
+            'openssl' => $options['openssl'],
+        ]);
+    }
+
     $kamailioFiles = [];
     if ($kamailioConfig !== '' && is_readable($kamailioConfig)) {
         require_once $target . '/admin/libraries/Atum/Kamailio/Scanner.class.php';
@@ -316,8 +353,19 @@ try {
         ],
         'host_integrations' => [
             'services' => [],
-            'created_files' => [],
+            'created_files' => $remoteIntegration['created_files'] ?? [],
             'modified_files' => [],
+            'reload_services' => $remoteIntegration['reload_services'] ?? [],
+        ],
+        'remote_development' => $remoteIntegration === null ? null : [
+            'enabled' => true,
+            'web_server' => $remoteIntegration['web_server'],
+            'listen_address' => $options['listen-address'],
+            'listen_port' => (int) $options['listen-port'],
+            'https' => true,
+            'tls_certificate' => $remoteIntegration['tls_certificate'],
+            'tls_key' => $remoteIntegration['tls_key'],
+            'certificate_identity' => 'self-signed development certificate',
         ],
     ];
     $ledgerPath = $configDir . '/install-ledger.json';
@@ -347,6 +395,7 @@ try {
     fwrite(STDERR, "Install failed: {$e->getMessage()}\n");
     if ($cliCreated) { @unlink($cliLink); }
     if ($uninstallCreated) { @unlink($uninstallLink); }
+    if ($remoteDeployment instanceof AtumRemoteDeployment) { $remoteDeployment->rollback($options['service-command']); }
     removeTree($stage);
     removeTree($target);
     removeTree($configDir);

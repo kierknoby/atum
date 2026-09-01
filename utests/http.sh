@@ -44,4 +44,33 @@ csrf=$(sed -n 's/.*name="csrf" value="\([^"]*\)".*/\1/p' "$TEST_DIR/revalidated"
 curl -sS -c "$TEST_DIR/cookies" -b "$TEST_DIR/cookies" -d "login=1&csrf=$csrf&username=httplimited&password=HTTP%20limited%20password%20123" -o /dev/null "http://127.0.0.1:$PORT/index.php"
 [ "$(curl -sS -o /dev/null -w '%{http_code}' -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/index.php?display=moduleadmin")" = 404 ]
 [ "$(curl -sS -o /dev/null -w '%{http_code}' -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/ajax.php?module=userman&command=delete")" = 403 ]
+
+# Remote mode refuses plain HTTP before starting a session, while the trusted
+# local TLS boundary produces Secure/HttpOnly/SameSite cookies and permits login.
+kill "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; SERVER_PID=""
+ATUM_REQUIRE_HTTPS=true php -S "127.0.0.1:$PORT" -t "$ROOT/public" >"$TEST_DIR/plain-remote.log" 2>&1 & SERVER_PID=$!
+i=0; while [ "$i" -lt 20 ]; do code=$(curl -sS -o "$TEST_DIR/plain-body" -D "$TEST_DIR/plain-headers" -w '%{http_code}' "http://127.0.0.1:$PORT/index.php" || true); [ "$code" = 403 ] && break; i=$((i+1)); sleep 1; done
+[ "$code" = 403 ]
+! grep -qi '^Set-Cookie:' "$TEST_DIR/plain-headers"
+kill "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; SERVER_PID=""
+ATUM_REQUIRE_HTTPS=true php -S "127.0.0.1:$PORT" "$ROOT/utests/https-router.php" >"$TEST_DIR/https-boundary.log" 2>&1 & SERVER_PID=$!
+i=0; while ! curl -fsS -D "$TEST_DIR/secure-headers" "http://127.0.0.1:$PORT/index.php" > "$TEST_DIR/secure-login"; do i=$((i+1)); [ "$i" -lt 20 ] || exit 1; sleep 1; done
+grep -qi '^Set-Cookie: ATUMSESSID=.*Secure.*HttpOnly.*SameSite=Strict' "$TEST_DIR/secure-headers"
+secure_session=$(sed -n 's/^Set-Cookie: ATUMSESSID=\([^;]*\).*/\1/ip' "$TEST_DIR/secure-headers" | head -n1)
+secure_csrf=$(sed -n 's/.*name="csrf" value="\([^"]*\)".*/\1/p' "$TEST_DIR/secure-login" | head -n1)
+[ -n "$secure_session" ] && [ -n "$secure_csrf" ]
+curl -sS -D "$TEST_DIR/secure-login-headers" -H "Cookie: ATUMSESSID=$secure_session" -d "login=1&csrf=$secure_csrf&username=httpadmin&password=HTTP%20test%20password%20123" "http://127.0.0.1:$PORT/index.php" -o /dev/null
+grep -qi '^Location: index.php' "$TEST_DIR/secure-login-headers"
+secure_admin_session=$(sed -n 's/^Set-Cookie: ATUMSESSID=\([^;]*\).*/\1/ip' "$TEST_DIR/secure-login-headers" | head -n1)
+[ -n "$secure_admin_session" ]
+curl -fsS -H "Cookie: ATUMSESSID=$secure_admin_session" "http://127.0.0.1:$PORT/index.php" > "$TEST_DIR/secure-admin-page"
+grep -q 'Dashboard' "$TEST_DIR/secure-admin-page"
+[ "$(curl -sS -o /dev/null -w '%{http_code}' -H "Cookie: ATUMSESSID=$secure_admin_session" -X POST "http://127.0.0.1:$PORT/ajax.php?module=userman&command=disable")" = 403 ]
+
+curl -fsS -D "$TEST_DIR/secure-viewer-headers" "http://127.0.0.1:$PORT/index.php" > "$TEST_DIR/secure-viewer-login"
+secure_viewer_session=$(sed -n 's/^Set-Cookie: ATUMSESSID=\([^;]*\).*/\1/ip' "$TEST_DIR/secure-viewer-headers" | head -n1)
+secure_viewer_csrf=$(sed -n 's/.*name="csrf" value="\([^"]*\)".*/\1/p' "$TEST_DIR/secure-viewer-login" | head -n1)
+curl -sS -D "$TEST_DIR/secure-viewer-login-headers" -H "Cookie: ATUMSESSID=$secure_viewer_session" -d "login=1&csrf=$secure_viewer_csrf&username=httplimited&password=HTTP%20limited%20password%20123" "http://127.0.0.1:$PORT/index.php" -o /dev/null
+secure_viewer_session=$(sed -n 's/^Set-Cookie: ATUMSESSID=\([^;]*\).*/\1/ip' "$TEST_DIR/secure-viewer-login-headers" | head -n1)
+[ "$(curl -sS -o /dev/null -w '%{http_code}' -H "Cookie: ATUMSESSID=$secure_viewer_session" "http://127.0.0.1:$PORT/index.php?display=moduleadmin")" = 404 ]
 echo 'PASS  HTTP authentication, throttling, rotation, expiry, revalidation, CSRF, method, allowlist and asset boundary checks'
