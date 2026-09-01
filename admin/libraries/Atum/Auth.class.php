@@ -257,7 +257,12 @@ final class AtumAuth
         if (($user['role'] ?? '') === 'admin') {
             return true;
         }
-        return $permission === 'view';
+        if (!preg_match('/^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)?$/', $permission)) {
+            return false;
+        }
+        $statement = $this->state->db()->prepare('SELECT 1 FROM role_permissions WHERE role=:role AND permission=:permission LIMIT 1');
+        $statement->execute([':role' => (string) ($user['role'] ?? ''), ':permission' => $permission]);
+        return $statement->fetchColumn() !== false;
     }
 
     public function requirePermission(string $permission): void
@@ -311,35 +316,49 @@ final class AtumAuth
 
     public function setEnabled(int $userId, bool $enabled): void
     {
-        $statement = $this->state->db()->prepare('SELECT id,username,role,enabled FROM users WHERE id=:id');
-        $statement->execute([':id' => $userId]);
-        $user = $statement->fetch();
-        if (!is_array($user)) {
-            throw new RuntimeException('Unknown Atum user.');
+        $db = $this->state->db();
+        $db->exec('BEGIN IMMEDIATE');
+        try {
+            $statement = $db->prepare('SELECT id,username,role,enabled FROM users WHERE id=:id');
+            $statement->execute([':id' => $userId]);
+            $user = $statement->fetch();
+            if (!is_array($user)) {
+                throw new RuntimeException('Unknown Atum user.');
+            }
+            if (!$enabled && $user['role'] === 'admin' && (bool) $user['enabled'] && $this->adminCount() <= 1) {
+                throw new RuntimeException('The last enabled administrator cannot be disabled.');
+            }
+            $db->prepare('UPDATE users SET enabled=:enabled,session_version=session_version+1,updated_at=:updated WHERE id=:id')->execute([
+                ':enabled' => $enabled ? 1 : 0, ':updated' => gmdate(DATE_ATOM), ':id' => $userId,
+            ]);
+            $db->commit();
+        } catch (Throwable $e) {
+            if ($db->inTransaction()) { $db->rollBack(); }
+            throw $e;
         }
-        if (!$enabled && $user['role'] === 'admin' && (bool) $user['enabled'] && $this->adminCount() <= 1) {
-            throw new RuntimeException('The last enabled administrator cannot be disabled.');
-        }
-        $this->state->db()->prepare('UPDATE users SET enabled=:enabled,session_version=session_version+1,updated_at=:updated WHERE id=:id')->execute([
-            ':enabled' => $enabled ? 1 : 0,
-            ':updated' => gmdate(DATE_ATOM),
-            ':id' => $userId,
-        ]);
         $this->audit->log('user.' . ($enabled ? 'enable' : 'disable'), 'success', 'user', (string) $userId, (string) $user['username']);
     }
 
     public function deleteUser(int $userId): void
     {
-        $statement = $this->state->db()->prepare('SELECT id,username,role,enabled FROM users WHERE id=:id');
-        $statement->execute([':id' => $userId]);
-        $user = $statement->fetch();
-        if (!is_array($user)) {
-            throw new RuntimeException('Unknown Atum user.');
+        $db = $this->state->db();
+        $db->exec('BEGIN IMMEDIATE');
+        try {
+            $statement = $db->prepare('SELECT id,username,role,enabled FROM users WHERE id=:id');
+            $statement->execute([':id' => $userId]);
+            $user = $statement->fetch();
+            if (!is_array($user)) {
+                throw new RuntimeException('Unknown Atum user.');
+            }
+            if ($user['role'] === 'admin' && (bool) $user['enabled'] && $this->adminCount() <= 1) {
+                throw new RuntimeException('The last enabled administrator cannot be deleted.');
+            }
+            $db->prepare('DELETE FROM users WHERE id=:id')->execute([':id' => $userId]);
+            $db->commit();
+        } catch (Throwable $e) {
+            if ($db->inTransaction()) { $db->rollBack(); }
+            throw $e;
         }
-        if ($user['role'] === 'admin' && (bool) $user['enabled'] && $this->adminCount() <= 1) {
-            throw new RuntimeException('The last enabled administrator cannot be deleted.');
-        }
-        $this->state->db()->prepare('DELETE FROM users WHERE id=:id')->execute([':id' => $userId]);
         $this->audit->log('user.delete', 'success', 'user', (string) $userId, (string) $user['username']);
     }
 

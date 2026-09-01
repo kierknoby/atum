@@ -20,9 +20,24 @@ final class AtumModules
         $paths = glob(ATUM_MODULES . '/*/module.xml') ?: [];
         sort($paths);
 
+        $classOwners = [];
         foreach ($paths as $path) {
             $manifest = AtumManifest::parse($path);
             $manifest['path'] = dirname($path);
+            $directory = basename($manifest['path']);
+            if ($directory !== $manifest['rawname']) {
+                throw new RuntimeException('Module directory and manifest rawname differ: ' . $path);
+            }
+            if (isset($this->manifests[$manifest['rawname']])) {
+                throw new RuntimeException('Duplicate module rawname: ' . $manifest['rawname']);
+            }
+            $expectedClass = self::className($manifest['rawname']);
+            $classKey = strtolower($expectedClass);
+            if (isset($classOwners[$classKey])) { throw new RuntimeException('Module class identity collision between ' . $classOwners[$classKey] . ' and ' . $manifest['rawname']); }
+            $classOwners[$classKey] = $manifest['rawname'];
+            if (!is_readable($manifest['path'] . '/' . $expectedClass . '.class.php')) {
+                throw new RuntimeException('Module class identity does not match manifest: ' . $path);
+            }
             $manifest['default_enabled'] = (bool) $manifest['enabled'];
             $state = $this->moduleState($manifest['rawname']);
             if ($state === null) {
@@ -35,6 +50,9 @@ final class AtumModules
                 $manifest['installed_version'] = (string) $state['version'];
             }
             $this->manifests[$manifest['rawname']] = $manifest;
+            if ($manifest['installed']) {
+                $this->registerPermissions($manifest);
+            }
         }
     }
 
@@ -190,6 +208,7 @@ final class AtumModules
         $db->beginTransaction();
         try {
             $this->runHook($manifest, 'install.php');
+            $this->registerPermissions($manifest);
             $statement = $db->prepare('INSERT INTO module_state (rawname,installed,enabled,version,updated_at) VALUES (:rawname,1,:enabled,:version,:updated) ON CONFLICT(rawname) DO UPDATE SET installed=1,enabled=excluded.enabled,version=excluded.version,updated_at=excluded.updated_at');
             $statement->execute([
                 ':rawname' => $rawname,
@@ -204,7 +223,7 @@ final class AtumModules
                 $db->rollBack();
             }
             try { $this->runHook($manifest, 'uninstall.php'); } catch (Throwable) { /* best effort hook rollback */ }
-            $this->Atum->Audit->log('module.install', 'failure', 'module', $rawname, $e->getMessage());
+            $this->Atum->Audit->log('module.install', 'failure', 'module', $rawname, 'event=module_install_failure');
             throw $e;
         }
         $this->refresh();
@@ -231,6 +250,7 @@ final class AtumModules
         $db->beginTransaction();
         try {
             $this->runHook($manifest, 'uninstall.php');
+            $db->prepare('DELETE FROM permission_definitions WHERE module=:module')->execute([':module' => $rawname]);
             $db->prepare('UPDATE module_state SET installed=0,enabled=0,updated_at=:updated WHERE rawname=:rawname')->execute([
                 ':updated' => gmdate(DATE_ATOM), ':rawname' => $rawname,
             ]);
@@ -240,7 +260,7 @@ final class AtumModules
             if ($db->inTransaction()) {
                 $db->rollBack();
             }
-            $this->Atum->Audit->log('module.uninstall', 'failure', 'module', $rawname, $e->getMessage());
+            $this->Atum->Audit->log('module.uninstall', 'failure', 'module', $rawname, 'event=module_uninstall_failure');
             throw $e;
         }
         $this->refresh();
@@ -279,7 +299,7 @@ final class AtumModules
             if ($db->inTransaction()) {
                 $db->rollBack();
             }
-            $this->Atum->Audit->log('module.upgrade', 'failure', 'module', $rawname, $e->getMessage());
+            $this->Atum->Audit->log('module.upgrade', 'failure', 'module', $rawname, 'event=module_upgrade_failure');
             throw $e;
         }
         $this->refresh();
@@ -324,6 +344,25 @@ final class AtumModules
         }
         $Atum = $this->Atum; // deliberately available to FreePBX-style module hook files
         include $hook;
+    }
+
+    private function registerPermissions(array $manifest): void
+    {
+        $statement = $this->Atum->State->db()->prepare('INSERT INTO permission_definitions(permission,module,description) VALUES (:permission,:module,:description) ON CONFLICT(permission) DO UPDATE SET module=excluded.module,description=excluded.description');
+        foreach ($manifest['permissions'] ?? [] as $definition) {
+            $permission = (string) ($definition['id'] ?? '');
+            if (!str_starts_with($permission, $manifest['rawname'] . '.') && $manifest['rawname'] !== 'framework') {
+                throw new RuntimeException('Module permission must be owned by its rawname: ' . $permission);
+            }
+            $owner = $this->Atum->State->db()->prepare('SELECT module FROM permission_definitions WHERE permission=:permission');
+            $owner->execute([':permission' => $permission]);
+            $existingOwner = $owner->fetchColumn();
+            if ($existingOwner !== false && $existingOwner !== $manifest['rawname']) { throw new RuntimeException('Permission is already owned by module ' . $existingOwner . ': ' . $permission); }
+            $statement->execute([':permission' => $permission, ':module' => $manifest['rawname'], ':description' => (string) ($definition['description'] ?? '')]);
+            if (str_ends_with($permission, '.view')) {
+                $this->Atum->State->db()->prepare("INSERT OR IGNORE INTO role_permissions(role,permission) VALUES ('viewer',:permission)")->execute([':permission' => $permission]);
+            }
+        }
     }
 
     private function moduleState(string $rawname): ?array

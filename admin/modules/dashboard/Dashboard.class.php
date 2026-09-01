@@ -13,7 +13,7 @@ class Dashboard extends AtumModule
         } catch (Throwable $e) {
             $error = 'Kamailio discovery is unavailable. See the Atum audit log for details.';
             try {
-                $this->Atum->Audit->log('dashboard.discovery.error', 'failure', 'kamailio', null, $e->getMessage());
+                $this->Atum->Audit->log('dashboard.discovery.error', 'failure', 'kamailio', null, 'event=discovery_failure');
             } catch (Throwable) {
                 // Keep the browser error generic even if audit storage is unavailable.
             }

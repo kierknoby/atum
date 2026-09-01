@@ -91,9 +91,11 @@ The current framework provides:
 
 ## Secret Handling
 
-Discovery attempts to redact database credentials and likely secret-bearing values before information reaches the GUI, AJAX response or CLI output.
+Discovery fails closed for parameter and define values. A small positive classification permits non-secret scalar tuning values; other values are redacted before information reaches the GUI, AJAX response or CLI output.
 
-Redaction is defensive rather than proof that every possible custom secret representation can be recognised. Do not use development-preview discovery output as a substitute for normal protection of Kamailio configuration files.
+Unknown statements are retained only with quoted values removed. This reduces accidental disclosure but is not proof that every custom syntax is safe. Do not use development-preview discovery output as a substitute for normal protection of Kamailio configuration files.
+
+The default audit destination is the same application-writable SQLite database as other Atum state. It has no tamper-evidence, external retention or append-only guarantee. The destination interface permits a future protected forwarder without presenting the current log as a production security record.
 
 Secrets must not be deliberately written to Atum logs, audit events, discovery output or browser responses.
 

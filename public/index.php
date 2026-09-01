@@ -61,7 +61,7 @@ if ($page === null) {
             ob_end_clean();
         }
         try {
-            $Atum->Audit->log('page.error', 'failure', 'page', $display, $e->getMessage());
+            $Atum->Audit->log('page.error', 'failure', 'page', $display, 'event=page_render_failure');
         } catch (Throwable) {
             // Preserve the generic browser failure even if audit storage is unavailable.
         }

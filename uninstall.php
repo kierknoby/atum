@@ -27,6 +27,11 @@ if (!is_readable($ledgerPath)) {
     fwrite(STDERR, "Atum install ledger not found: {$ledgerPath}\nRefusing to guess what belongs to Atum.\n");
     exit(1);
 }
+$ledgerStat = @stat($ledgerPath);
+if (!is_array($ledgerStat) || (int) $ledgerStat['uid'] !== 0 || (((int) $ledgerStat['mode']) & 0022) !== 0) {
+    fwrite(STDERR, "Atum install ledger is not securely root-owned; refusing to use it.\n");
+    exit(1);
+}
 $ledger = json_decode((string) file_get_contents($ledgerPath), true, 512, JSON_THROW_ON_ERROR);
 if (($ledger['schema'] ?? null) !== 1) {
     fwrite(STDERR, "Unsupported install-ledger schema.\n");

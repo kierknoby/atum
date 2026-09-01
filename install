@@ -17,6 +17,8 @@ PACKAGES_ADDED=""
 ASSUME_YES=0
 ALLOW_NO_KAMAILIO=0
 DEVELOPMENT_ACK=0
+TRANSACTION_DIR="${ATUM_TRANSACTION_DIR:-/var/lib/atum-install-transaction}"
+RECOVERED_PACKAGES=""
 
 usage() {
 cat <<'EOF'
@@ -163,15 +165,59 @@ fi
 [ "$(id -u)" -eq 0 ] || fail "System installation must be run as root."
 command -v groupadd >/dev/null 2>&1 || fail "This v0.1 system installer requires groupadd; use --check only on other platforms."
 command -v useradd >/dev/null 2>&1 || fail "This v0.1 system installer requires useradd; use --check only on other platforms."
-[ ! -e "$PREFIX" ] || fail "Atum is already present at $PREFIX. v0.1 has no supported in-place upgrade path; do not overwrite an installation."
-[ ! -e "$STATE_DIR" ] || fail "Atum state already exists at $STATE_DIR. Refusing to overwrite it."
-[ ! -e "$CONFIG_DIR" ] || fail "Atum configuration already exists at $CONFIG_DIR. Refusing to overwrite it."
-
 if [ -z "$KAMAILIO_CONFIG" ]; then
     [ "$ALLOW_NO_KAMAILIO" -eq 1 ] || fail "No existing Kamailio configuration found."
 else
     [ -r "$KAMAILIO_CONFIG" ] || fail "Kamailio configuration is not readable: $KAMAILIO_CONFIG"
 fi
+
+recover_transaction() {
+    [ -d "$TRANSACTION_DIR" ] || return 0
+    [ "$(stat -c %u "$TRANSACTION_DIR" 2>/dev/null || echo -1)" = 0 ] || fail "Interrupted-install journal is not root-owned: $TRANSACTION_DIR"
+    if [ ! -e "$TRANSACTION_DIR/install-id" ] && [ -z "$(find "$TRANSACTION_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then rmdir "$TRANSACTION_DIR"; return 0; fi
+    old_id=$(sed -n '1p' "$TRANSACTION_DIR/install-id" 2>/dev/null || true)
+    case "$old_id" in *[!a-f0-9]*|'') fail "Interrupted-install journal has an invalid installation ID." ;; esac
+    old_config=$(sed -n '1p' "$TRANSACTION_DIR/configuration" 2>/dev/null || true)
+    if [ -n "$old_config" ] && [ -r "$old_config/install-ledger.json" ] && grep -q '"install_id": "'"$old_id"'"' "$old_config/install-ledger.json"; then
+        find "$TRANSACTION_DIR" -mindepth 1 -maxdepth 1 -type f -exec rm -f {} \;
+        rmdir "$TRANSACTION_DIR"
+        return 0
+    fi
+    say "Recovering interrupted Atum installation $old_id"
+    for key in application-stage application state configuration; do
+        [ -f "$TRANSACTION_DIR/intended-$key" ] || [ -f "$TRANSACTION_DIR/created-$key" ] || continue
+        old_path=$(sed -n '1p' "$TRANSACTION_DIR/$key")
+        case "$old_path" in /*) ;; *) fail "Interrupted-install journal contains an unsafe path." ;; esac
+        [ "$old_path" != / ] || fail "Interrupted-install journal contains an unsafe path."
+        if [ -e "$old_path" ]; then
+            marker="$old_path/.atum-provisional-install-id"
+            committed_marker="$old_path/.atum-install-id"
+            if ! { { [ -r "$marker" ] && [ "$(sed -n '1p' "$marker")" = "$old_id" ]; } || { [ -r "$committed_marker" ] && [ "$(sed -n '1p' "$committed_marker")" = "$old_id" ]; }; }; then
+                [ -d "$old_path" ] && [ -z "$(find "$old_path" -mindepth 1 -maxdepth 1 -print -quit)" ] || fail "Interrupted path has no matching provisional ownership marker: $old_path"
+            fi
+            php -r '$p=$argv[1]; $it=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($p,FilesystemIterator::SKIP_DOTS),RecursiveIteratorIterator::CHILD_FIRST); foreach($it as $i){$i->isDir()&&!$i->isLink()?rmdir($i->getPathname()):unlink($i->getPathname());} rmdir($p);' "$old_path" || fail "Unable to recover $old_path"
+        fi
+    done
+    if [ -s "$TRANSACTION_DIR/packages-added" ]; then RECOVERED_PACKAGES=$(tr '\n' ' ' < "$TRANSACTION_DIR/packages-added" | sed 's/[[:space:]]*$//'); say "Retaining and carrying forward packages from interrupted installation: $RECOVERED_PACKAGES"; fi
+    id atum >/dev/null 2>&1 && { [ -f "$TRANSACTION_DIR/intended-user" ] || [ -f "$TRANSACTION_DIR/user-created" ]; } && userdel atum >/dev/null 2>&1 || true
+    { [ -f "$TRANSACTION_DIR/intended-group" ] || [ -f "$TRANSACTION_DIR/group-created" ]; } && groupdel atum >/dev/null 2>&1 || true
+    find "$TRANSACTION_DIR" -mindepth 1 -maxdepth 1 -type f -exec rm -f {} \;
+    rmdir "$TRANSACTION_DIR"
+}
+
+recover_transaction
+[ ! -e "$PREFIX" ] || fail "Atum is already present at $PREFIX. v0.1 has no supported in-place upgrade path; do not overwrite an installation."
+[ ! -e "$STATE_DIR" ] || fail "Atum state already exists at $STATE_DIR. Refusing to overwrite it."
+[ ! -e "$CONFIG_DIR" ] || fail "Atum configuration already exists at $CONFIG_DIR. Refusing to overwrite it."
+INSTALL_ID=$(openssl rand -hex 16 2>/dev/null || php -r 'echo bin2hex(random_bytes(16));')
+mkdir -m 0700 "$TRANSACTION_DIR"
+journal_put() { printf '%s\n' "$2" > "$TRANSACTION_DIR/.$1.tmp"; chmod 0600 "$TRANSACTION_DIR/.$1.tmp"; mv "$TRANSACTION_DIR/.$1.tmp" "$TRANSACTION_DIR/$1"; }
+journal_put install-id "$INSTALL_ID"
+journal_put application "$PREFIX"
+journal_put state "$STATE_DIR"
+journal_put configuration "$CONFIG_DIR"
+chmod 0600 "$TRANSACTION_DIR"/*
+[ -z "$RECOVERED_PACKAGES" ] || printf '%s\n' $RECOVERED_PACKAGES > "$TRANSACTION_DIR/packages-added"
 
 snapshot_packages() {
     case "$PKG_MANAGER" in
@@ -190,16 +236,7 @@ rollback_install() {
     if [ "$status" -ne 0 ] && [ "$INSTALL_COMMITTED" -eq 0 ]; then
         [ "$USER_CREATED" -eq 1 ] && command -v userdel >/dev/null 2>&1 && userdel atum >/dev/null 2>&1 || true
         [ "$GROUP_CREATED" -eq 1 ] && command -v groupdel >/dev/null 2>&1 && groupdel atum >/dev/null 2>&1 || true
-        if [ -n "$PACKAGES_ADDED" ]; then
-            case "$PKG_MANAGER" in
-                apt-get)
-                    DEBIAN_FRONTEND=noninteractive apt-get purge -y $PACKAGES_ADDED >/dev/null 2>&1 || true
-                    ;;
-                dnf|yum)
-                    "$PKG_MANAGER" remove -y $PACKAGES_ADDED >/dev/null 2>&1 || true
-                    ;;
-            esac
-        fi
+        [ -z "$PACKAGES_ADDED" ] || say "Retaining packages after failed installation; safe reverse-dependency removal is deferred to recovery: $PACKAGES_ADDED"
     fi
     exit "$status"
 }
@@ -208,7 +245,11 @@ snapshot_packages > "$BEFORE"
 
 refresh_packages_added() {
     snapshot_packages > "$AFTER"
-    PACKAGES_ADDED=$(comm -13 "$BEFORE" "$AFTER" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+    current_added=$(comm -13 "$BEFORE" "$AFTER" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+    PACKAGES_ADDED=$(printf '%s\n%s\n' "$RECOVERED_PACKAGES" "$current_added" | tr ' ' '\n' | sed '/^$/d' | sort -u | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+    printf '%s\n' $PACKAGES_ADDED > "$TRANSACTION_DIR/packages-added.tmp"
+    chmod 0600 "$TRANSACTION_DIR/packages-added.tmp"
+    mv "$TRANSACTION_DIR/packages-added.tmp" "$TRANSACTION_DIR/packages-added"
 }
 
 confirm_packages() {
@@ -225,10 +266,10 @@ install_packages() {
     case "$PKG_MANAGER" in
         apt-get)
             apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@"
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@" || { refresh_packages_added; return 1; }
             ;;
         dnf|yum)
-            "$PKG_MANAGER" install -y "$@"
+            "$PKG_MANAGER" install -y "$@" || { refresh_packages_added; return 1; }
             ;;
         *) return 1 ;;
     esac
@@ -269,11 +310,15 @@ say "Kamailio DB use : ${DB_SCHEMES:-none/unknown} (reported only; adapters are 
 if (command -v getent >/dev/null 2>&1 && getent group atum >/dev/null 2>&1) || id atum >/dev/null 2>&1 || grep -q '^atum:' /etc/group 2>/dev/null; then
     fail "A pre-existing user or group named 'atum' exists. Refusing to reuse an identity Atum did not create."
 fi
+journal_put intended-group 1
 groupadd --system atum
 GROUP_CREATED=1
+journal_put group-created 1
 NOLOGIN_SHELL=$(command -v nologin 2>/dev/null || printf '%s' /usr/sbin/nologin)
+journal_put intended-user 1
 useradd --system --gid atum --home-dir "$STATE_DIR" --shell "$NOLOGIN_SHELL" atum
 USER_CREATED=1
+journal_put user-created 1
 
 ATUM_INSTALL_BOOTSTRAPPED=1 php "$SOURCE_DIR/install.php" \
     --prefix="$PREFIX" \
@@ -284,9 +329,13 @@ ATUM_INSTALL_BOOTSTRAPPED=1 php "$SOURCE_DIR/install.php" \
     --package-manager="$PKG_MANAGER" \
     --packages-added="$PACKAGES_ADDED" \
     --user-created="$USER_CREATED" \
-    --group-created="$GROUP_CREATED"
+    --group-created="$GROUP_CREATED" \
+    --install-id="$INSTALL_ID" \
+    --transaction-dir="$TRANSACTION_DIR"
 
 INSTALL_COMMITTED=1
+find "$TRANSACTION_DIR" -mindepth 1 -maxdepth 1 -type f -exec rm -f {} \;
+rmdir "$TRANSACTION_DIR"
 
 say ""
 say "Atum installed without modifying Kamailio."

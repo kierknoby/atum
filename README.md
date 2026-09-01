@@ -29,7 +29,7 @@ Current limitations include:
 - The project has not undergone an independent security audit or penetration test.
 - CI portability checks do not establish support for a real Kamailio installation on that operating system.
 
-Unknown or unsupported Kamailio configuration is retained as unknown. Atum does not infer meaning merely to make an object editable.
+Unknown or unsupported Kamailio statements are retained as redacted, provenance-bearing unknown records. Atum does not infer meaning merely to make an object editable.
 
 ## Compatibility
 
@@ -97,13 +97,15 @@ The installer does not install, replace or reconfigure Kamailio.
 During installation it:
 
 - discovers the existing Kamailio configuration tree recursively;
-- records SHA-256 hashes of discovered Kamailio configuration files before installation;
-- verifies that the same tree has not changed before installation is committed;
+- records SHA-256 hashes of statically recognised literal Kamailio configuration files before installation;
+- records the partial scope and confidence of that snapshot and verifies the same recognised set before commit;
 - installs only missing baseline Atum dependencies when package installation is permitted;
 - creates a dedicated local `atum` account for the current Linux system-install path;
 - creates the first Atum administrator interactively;
 - stores Atum application, configuration and state separately from Kamailio;
 - records Atum-owned host changes in a root-owned installation ledger used for rollback and removal;
+- creates a root-owned provisional transaction journal before host mutation so an interrupted install can be recovered without guessing;
+- copies only files named by `install-files.txt`, not arbitrary checkout contents;
 - refuses to overwrite an existing Atum application, configuration or state tree.
 
 Database schemes discovered in Kamailio configuration are reported for capability detection. Database-specific PHP drivers are not installed merely because Kamailio uses that database; an Atum module must declare a driver when it actually requires one.
@@ -167,9 +169,9 @@ The Discovery module currently identifies:
 - database URL schemes used for dependency and capability discovery;
 - source file and line provenance for discovered objects.
 
-Known database credentials and likely secret-bearing values are redacted before discovery data reaches the GUI, AJAX response or CLI output.
+Discovery fails closed for configuration values. Only a small positive classification of non-secret scalar tuning values is returned; other parameter and define values are redacted before reaching the GUI, AJAX response or CLI output.
 
-Discovery is conservative. Finding a route or module does not mean Atum understands the complete behaviour of that configuration.
+Discovery is conservative. Results carry syntactic or conditional confidence, and unsupported/non-literal configuration is retained as redacted unknown data. The scanner does not prove the complete effective configuration.
 
 ## Existing Installation Authority
 
@@ -263,7 +265,7 @@ Current controls include:
 - server-side page and AJAX permission checks;
 - Content Security Policy and related response headers;
 - generic browser/AJAX errors instead of raw exception details;
-- an audit log for authentication and Atum management operations;
+- an application-writable SQLite audit log for authentication and Atum management operations; it is diagnostic, not tamper-proof;
 - a dedicated `public/` document root;
 - authenticated, allowlisted module asset serving;
 - loopback-only enforcement for the built-in server;
@@ -360,9 +362,11 @@ sh -n install
 sh -n uninstall
 find . -type f -name '*.php' -print0 | xargs -0 -n1 php -l
 php utests/run.php
+sh utests/http.sh
+sudo sh utests/system-lifecycle.sh
 ```
 
-CI runs PHP syntax checks, shell syntax checks and the test suite. It exercises multiple supported PHP versions on Linux and a macOS PHP portability job. CI success is not equivalent to Kamailio integration or production certification.
+CI runs Composer validation, PHP and shell syntax checks, JavaScript syntax checks, SQLite-backed security/framework tests, HTTP boundary tests and an isolated Linux installer/uninstaller test. Linux exercises PHP 8.2, 8.3 and 8.4; macOS exercises PHP 8.3 portability. CI success is not equivalent to Kamailio integration or production certification.
 
 ## Current Limitations
 

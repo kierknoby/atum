@@ -43,7 +43,7 @@ final class AtumAjax
             $this->respond($result, 200);
         } catch (Throwable $e) {
             try {
-                $this->Atum->Audit->log('ajax.error', 'failure', 'module', $module, $command . ': ' . $e->getMessage());
+                $this->Atum->Audit->log('ajax.error', 'failure', 'module', $module, 'event=ajax_handler_failure command=' . $command);
             } catch (Throwable) {
                 // Do not let audit failure expose an internal exception to the client.
             }

@@ -82,9 +82,11 @@ Module installed/enabled state is stored outside module source in Atum's local s
 
 Module Admin provides dependency-aware install, uninstall, enable and disable operations for Atum modules.
 
+Module manifests may declare namespaced permissions such as `discovery.view`. Definitions are registered with module state and roles receive explicit grants. Administrators retain all permissions; other roles do not implicitly receive management permissions.
+
 In v0.1, lifecycle hooks may modify Atum-owned application state only. They must not independently install packages, create services/users, modify shared host configuration or make other host-level changes.
 
-Host-level module mutations require an ownership/rollback API before they can be supported safely.
+Host-level module mutations require a prepare, declare, validate, journal, apply, verify, commit and rollback operation API before they can be supported safely. Current hooks run only as trusted bundled application migrations and are not represented as transactional host operations.
 
 ## Kamailio Capability Modules
 

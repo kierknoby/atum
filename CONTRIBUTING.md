@@ -13,9 +13,11 @@ sh -n install
 sh -n uninstall
 find . -type f -name '*.php' -print0 | xargs -0 -n1 php -l
 php utests/run.php
+sh utests/http.sh
+sudo sh utests/system-lifecycle.sh
 ```
 
-Do not treat a skipped security/state test as a successful full validation run. The normal test environment requires PDO SQLite for the Atum state/authentication tests.
+Security/state tests fail rather than skip when PDO SQLite is unavailable. The HTTP test requires loopback listener access. The isolated system lifecycle test requires root because it exercises account, link, install-ledger and uninstall behaviour using temporary application/state/configuration paths.
 
 A change that requires a new PHP extension must declare it in the relevant module's `module.xml` rather than assuming the extension exists.
 

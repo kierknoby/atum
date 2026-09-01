@@ -20,13 +20,13 @@ The installer does not write Kamailio configuration.
 
 Before committing an installation, it:
 
-1. recursively discovers the Kamailio configuration tree starting from the selected root configuration;
+1. discovers statically recognisable literal includes starting from the selected root configuration;
 2. records SHA-256 hashes of discovered configuration files;
 3. performs Atum installation work;
-4. discovers/hashes the Kamailio tree again;
-5. aborts if the discovered Kamailio configuration changed during the transaction.
+4. discovers/hashes the same statically recognisable scope again;
+5. aborts if that recognised configuration changed during the transaction.
 
-This check detects changes during Atum installation. It is not a general Kamailio integrity-monitoring system.
+The ledger records the snapshot scope as partial. Macro-generated/non-literal includes, conditional preprocessing and external KEMI/custom configuration are not proven by this check. It is not a general Kamailio integrity-monitoring system.
 
 ## Atum-Owned Paths
 
@@ -92,6 +92,8 @@ Before the transaction is committed, failure should remove safely reversible cha
 - safely removable dependency packages added by the transaction.
 
 Installation must not leave a partially committed Atum tree and then rely on a later manual cleanup.
+
+Before the first host mutation, the installer creates a root-owned provisional transaction journal. Intended paths are recorded before creation and receive the same random provisional installation ID. Package deltas are reconciled after both successful and failed package-manager calls. A later installer recovers journal-owned paths and carries retained dependency ownership into the next committed ledger. Packages are retained when safe reverse-dependency removal cannot be proved.
 
 ## Existing Shared Host Files
 

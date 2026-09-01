@@ -5,8 +5,12 @@ declare(strict_types=1);
 
 final class AtumAudit
 {
-    public function __construct(private AtumState $state)
+    /** @var list<AtumAuditDestination> */
+    private array $destinations;
+
+    public function __construct(private AtumState $state, ?array $destinations = null)
     {
+        $this->destinations = $destinations ?? [new AtumSqliteAuditDestination($state)];
     }
 
     public function log(
@@ -18,11 +22,10 @@ final class AtumAudit
         ?array $actor = null
     ): void {
         $actor ??= $_SESSION['atum_user'] ?? null;
-        $statement = $this->state->db()->prepare(
-            'INSERT INTO audit_log (created_at,user_id,username,remote_addr,action,object_type,object_id,outcome,detail) '
-            . 'VALUES (:created_at,:user_id,:username,:remote_addr,:action,:object_type,:object_id,:outcome,:detail)'
-        );
-        $statement->execute([
+        if ($detail !== null && (!preg_match('/^[A-Za-z0-9_.:= >-]{0,512}$/', $detail) || str_contains(strtolower($detail), '://'))) {
+            $detail = 'event=detail_redacted';
+        }
+        $event = [
             ':created_at' => gmdate(DATE_ATOM),
             ':user_id' => is_array($actor) ? ($actor['id'] ?? null) : null,
             ':username' => is_array($actor) ? ($actor['username'] ?? null) : null,
@@ -32,7 +35,8 @@ final class AtumAudit
             ':object_id' => $objectId,
             ':outcome' => $outcome,
             ':detail' => $detail,
-        ]);
+        ];
+        foreach ($this->destinations as $destination) { $destination->write($event); }
     }
 
     public function recent(int $limit = 100): array

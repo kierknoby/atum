@@ -6,8 +6,9 @@
   <publisher>FreePBX UK</publisher>
   <license>GPL-3.0-or-later</license>
   <category>Kamailio</category>
-  <permission>view</permission>
+  <permission>discovery.view</permission>
   <description>Read-only discovery and inventory of an existing Kamailio installation.</description>
+  <permissions><permission><id>discovery.view</id><description>View Kamailio discovery</description></permission></permissions>
   <enabled>true</enabled>
   <depends>
     <module>framework</module>
@@ -17,7 +18,7 @@
       <id>discovery</id>
       <name>Discovery</name>
       <category>Kamailio</category>
-      <sort>10</sort>
+      <sort>10</sort><permission>discovery.view</permission>
     </item>
   </menuitems>
 </module>

@@ -35,6 +35,8 @@ $options = [
     'packages-added' => '',
     'user-created' => '0',
     'group-created' => '0',
+    'install-id' => '',
+    'transaction-dir' => '/var/lib/atum-install-transaction',
 ];
 foreach (array_slice($argv, 1) as $arg) {
     if (!str_starts_with($arg, '--') || !str_contains($arg, '=')) {
@@ -59,12 +61,16 @@ $created = [];
 $committed = false;
 $cliCreated = false;
 $uninstallCreated = false;
-$installId = bin2hex(random_bytes(16));
+$installId = $options['install-id'];
+if (!preg_match('/^[a-f0-9]{32}$/', $installId)) { throw new RuntimeException('Invalid provisional installation ID.'); }
+$transactionDir = rtrim($options['transaction-dir'], '/');
 
 $kamailioSnapshot = [];
+$snapshotScope = ['scope' => 'no Kamailio configuration selected', 'confidence' => 'none', 'effective_configuration_proven' => false];
 if ($kamailioConfig !== '' && is_readable($kamailioConfig)) {
     require_once $source . '/admin/libraries/Atum/Kamailio/Scanner.class.php';
     $initialScan = (new AtumKamailioScanner())->scan($kamailioConfig);
+    $snapshotScope = $initialScan['completeness'];
     foreach ($initialScan['files'] as $file) {
         if (is_file($file) && is_readable($file)) {
             $kamailioSnapshot[$file] = hash_file('sha256', $file);
@@ -91,33 +97,31 @@ function removeTree(string $path): void
     @rmdir($path);
 }
 
+function journalWrite(string $directory, string $name, string $value): void
+{
+    $temporary = $directory . '/.' . $name . '.tmp-' . bin2hex(random_bytes(4));
+    if (file_put_contents($temporary, $value, LOCK_EX) === false || !rename($temporary, $directory . '/' . $name)) {
+        @unlink($temporary); throw new RuntimeException('Unable to update provisional installation journal.');
+    }
+    @chmod($directory . '/' . $name, 0600);
+}
+
 function copyTree(string $source, string $target): void
 {
-    if (!mkdir($target, 0755, true) && !is_dir($target)) {
+    if (!is_dir($target) && !mkdir($target, 0755, true) && !is_dir($target)) {
         throw new RuntimeException('Unable to create staging directory ' . $target);
     }
-    $iterator = new RecursiveIteratorIterator(
-        new RecursiveDirectoryIterator($source, FilesystemIterator::SKIP_DOTS),
-        RecursiveIteratorIterator::SELF_FIRST
-    );
-    foreach ($iterator as $item) {
-        $relative = substr($item->getPathname(), strlen($source) + 1);
-        if (
-            str_starts_with($relative, '.git')
-            || str_starts_with($relative, 'utests')
-            || str_starts_with($relative, 'var/')
-            || $relative === 'var'
-        ) {
-            continue;
-        }
+    $manifest = $source . '/install-files.txt';
+    $entries = is_readable($manifest) ? file($manifest, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) : false;
+    if (!is_array($entries)) { throw new RuntimeException('Install file manifest is missing.'); }
+    $entries[] = 'install-files.txt';
+    foreach ($entries as $relative) {
+        if (!preg_match('#^[A-Za-z0-9._/-]+$#', $relative) || str_contains($relative, '..')) { throw new RuntimeException('Unsafe install manifest entry: ' . $relative); }
+        $item = $source . '/' . $relative;
+        if (!is_file($item) || is_link($item)) { throw new RuntimeException('Install manifest file is missing or not regular: ' . $relative); }
         $destination = $target . '/' . $relative;
-        if ($item->isDir()) {
-            if (!is_dir($destination) && !mkdir($destination, 0755, true) && !is_dir($destination)) {
-                throw new RuntimeException('Unable to create ' . $destination);
-            }
-        } elseif (!copy($item->getPathname(), $destination)) {
-            throw new RuntimeException('Unable to copy ' . $item->getPathname());
-        }
+        if (!is_dir(dirname($destination)) && !mkdir(dirname($destination), 0755, true) && !is_dir(dirname($destination))) { throw new RuntimeException('Unable to create ' . dirname($destination)); }
+        if (!copy($item, $destination)) { throw new RuntimeException('Unable to copy ' . $item); }
     }
 }
 
@@ -186,16 +190,26 @@ try {
         throw new RuntimeException('Atum CLI/uninstaller path is already occupied. Refusing to overwrite it.');
     }
 
+    journalWrite($transactionDir, 'application-stage', $stage . "\n");
+    journalWrite($transactionDir, 'intended-application-stage', "1\n");
+    if (!mkdir($stage, 0755, true) && !is_dir($stage)) { throw new RuntimeException('Unable to create staging directory ' . $stage); }
+    file_put_contents($stage . '/.atum-provisional-install-id', $installId . "\n", LOCK_EX);
     copyTree($source, $stage);
     $created[] = ['type' => 'directory', 'path' => $target];
 
+    journalWrite($transactionDir, 'intended-state', "1\n");
     if (!mkdir($stateDir, 0700, true) && !is_dir($stateDir)) {
         throw new RuntimeException('Unable to create ' . $stateDir);
     }
+    file_put_contents($stateDir . '/.atum-provisional-install-id', $installId . "\n", LOCK_EX);
+    journalWrite($transactionDir, 'created-state', "1\n");
     $created[] = ['type' => 'directory', 'path' => $stateDir];
+    journalWrite($transactionDir, 'intended-configuration', "1\n");
     if (!mkdir($configDir, 0750, true) && !is_dir($configDir)) {
         throw new RuntimeException('Unable to create ' . $configDir);
     }
+    file_put_contents($configDir . '/.atum-provisional-install-id', $installId . "\n", LOCK_EX);
+    journalWrite($transactionDir, 'created-configuration', "1\n");
     $created[] = ['type' => 'directory', 'path' => $configDir];
 
     $config = "# Atum GUI configuration\n# v0.1 is a development preview and is NOT SUITABLE FOR PRODUCTION.\n"
@@ -227,15 +241,19 @@ try {
     }
     $atum->Auth->createUser($username, $password, 'admin');
 
+    journalWrite($transactionDir, 'intended-application', "1\n");
     if (!rename($stage, $target)) {
         throw new RuntimeException('Unable to commit staged Atum application.');
     }
+    file_put_contents($target . '/.atum-provisional-install-id', $installId . "\n", LOCK_EX);
+    journalWrite($transactionDir, 'created-application', "1\n");
 
     foreach ([$target, $stateDir, $configDir] as $ownedTree) {
         if (file_put_contents($ownedTree . '/.atum-install-id', $installId . "\n", LOCK_EX) === false) {
             throw new RuntimeException('Unable to mark Atum-owned path ' . $ownedTree);
         }
         @chmod($ownedTree . '/.atum-install-id', 0600);
+        @unlink($ownedTree . '/.atum-provisional-install-id');
     }
 
     @chmod($target . '/bin/atum', 0755);
@@ -294,6 +312,7 @@ try {
             'root_config' => $kamailioConfig,
             'files_at_install' => $kamailioFiles,
             'installer_modified' => false,
+            'snapshot_scope' => $snapshotScope,
         ],
         'host_integrations' => [
             'services' => [],
@@ -302,9 +321,7 @@ try {
         ],
     ];
     $ledgerPath = $configDir . '/install-ledger.json';
-    if (file_put_contents($ledgerPath, json_encode($ledger, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n", LOCK_EX) === false) {
-        throw new RuntimeException('Unable to write install ledger.');
-    }
+    journalWrite($configDir, 'install-ledger.json', json_encode($ledger, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
     @chmod($ledgerPath, 0600);
     @chown($ledgerPath, 'root');
     @chgrp($ledgerPath, 'root');

@@ -20,7 +20,7 @@ class Discovery extends AtumModule
             $report = null;
             $error = 'Kamailio discovery failed. See the Atum audit log for details.';
             try {
-                $this->Atum->Audit->log('discovery.page.error', 'failure', 'kamailio', null, $e->getMessage());
+                $this->Atum->Audit->log('discovery.page.error', 'failure', 'kamailio', null, 'event=discovery_failure');
             } catch (Throwable) {
                 // Keep the browser error generic even if audit storage is unavailable.
             }
@@ -40,7 +40,7 @@ class Discovery extends AtumModule
         }
 
         $settings['read_only'] = true;
-        $settings['permission'] = 'view';
+        $settings['permission'] = 'discovery.view';
         $settings['method'] = 'GET';
         return true;
     }

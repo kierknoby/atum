@@ -19,6 +19,7 @@ final class Atum
     public AtumState $State;
     public AtumAudit $Audit;
     public AtumAuth $Auth;
+    public AtumLifecycle $Lifecycle;
 
     private array $moduleObjects = [];
 
@@ -29,6 +30,7 @@ final class Atum
         $this->State = new AtumState($this->Config);
         $this->Audit = new AtumAudit($this->State);
         $this->Auth = new AtumAuth($this->State, $this->Audit, $this->Config);
+        $this->Lifecycle = new AtumLifecycle($this->State, $this->Audit);
         $this->Modules = new AtumModules($this);
         $this->Ajax = new AtumAjax($this);
         $this->System = new AtumSystem($this->Config);

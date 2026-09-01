@@ -6,8 +6,9 @@
   <publisher>FreePBX UK</publisher>
   <license>GPL-3.0-or-later</license>
   <category>System</category>
-  <permission>view</permission>
+  <permission>dashboard.view</permission>
   <description>Atum and adopted Kamailio system overview.</description>
+  <permissions><permission><id>dashboard.view</id><description>View the Atum dashboard</description></permission></permissions>
   <enabled>true</enabled>
   <depends><module>framework</module></depends>
   <menuitems>
@@ -15,7 +16,7 @@
       <id>dashboard</id>
       <name>Dashboard</name>
       <category>System</category>
-      <sort>1</sort>
+      <sort>1</sort><permission>dashboard.view</permission>
     </item>
   </menuitems>
 </module>

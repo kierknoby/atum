@@ -99,8 +99,29 @@ CREATE TABLE IF NOT EXISTS login_throttle (
     first_failure INTEGER NOT NULL,
     blocked_until INTEGER
 );
+CREATE TABLE IF NOT EXISTS permission_definitions (
+    permission TEXT PRIMARY KEY,
+    module TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS role_permissions (
+    role TEXT NOT NULL,
+    permission TEXT NOT NULL,
+    PRIMARY KEY(role, permission),
+    FOREIGN KEY(permission) REFERENCES permission_definitions(permission) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS lifecycle_journal (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('prepared','applying','committed','rolled_back')),
+    operations TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 SQL);
         $this->ensureColumn('users', 'session_version', 'INTEGER NOT NULL DEFAULT 1');
+        $this->db->exec("INSERT OR IGNORE INTO permission_definitions(permission,module,description) VALUES ('view','framework','View Atum'),('admin','framework','Administer Atum')");
+        $this->db->exec("INSERT OR IGNORE INTO role_permissions(role,permission) VALUES ('viewer','view'),('admin','view'),('admin','admin')");
     }
 
     private function ensureColumn(string $table, string $column, string $definition): void
@@ -114,4 +135,3 @@ SQL);
         $this->db->exec('ALTER TABLE ' . $table . ' ADD COLUMN ' . $column . ' ' . $definition);
     }
 }
-
