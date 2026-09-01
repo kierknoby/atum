@@ -21,6 +21,7 @@ run_case() {
     expected=$4
     missing=${5:-}
     scope=${6:-remote}
+    expected_server=${selection:-$servers}
     case_root="$TEST_ROOT/$name"
     mkdir -p "$case_root/bin" "$case_root/nginx" "$case_root/apache-available" "$case_root/apache-enabled" "$case_root/fpm"
     if [ "$missing" != php ]; then
@@ -67,6 +68,7 @@ run_case() {
         pass)
             [ "$status" -eq 0 ] || { cat "$case_root/output" >&2; exit 1; }
             grep -q 'remote development configuration requested' "$case_root/output"
+            grep -q "Web server       : $expected_server (detected; reused)" "$case_root/output"
             ;;
         ambiguous)
             [ "$status" -ne 0 ] || { echo "$name unexpectedly passed" >&2; exit 1; }
@@ -76,7 +78,14 @@ run_case() {
             [ "$status" -ne 0 ] || { echo "$name unexpectedly passed" >&2; exit 1; }
             if [ "$missing" = php ]; then
                 grep -q 'PHP              : missing' "$case_root/output"
-                [ "$scope" != remote ] || [ "$servers" != none ] || grep -q -- '- Nginx' "$case_root/output"
+                if [ "$scope" = remote ] && [ "$servers" = none ]; then
+                    grep -q -- '- PHP 8.2 or newer CLI' "$case_root/output"
+                    [ "$(grep -c -- '^- PHP 8.2 or newer CLI$' "$case_root/output")" -eq 1 ]
+                    grep -q -- '- Nginx' "$case_root/output"
+                    grep -q -- '- PHP-FPM cannot be evaluated until PHP is installed' "$case_root/output"
+                    grep -q 'selected for provisioning; not installed' "$case_root/output"
+                    ! grep -q -- '^- 8.2$' "$case_root/output"
+                fi
             else
                 grep -q -- "- $missing" "$case_root/output"
             fi

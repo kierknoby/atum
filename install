@@ -146,6 +146,11 @@ fi
 WEB_SERVER_WAS_PRESENT=0
 if [ "$WEB_SERVER" = nginx ] && [ "$NGINX_DETECTED" -eq 1 ]; then WEB_SERVER_WAS_PRESENT=1; fi
 if [ "$WEB_SERVER" = apache ] && [ "$APACHE_DETECTED" -eq 1 ]; then WEB_SERVER_WAS_PRESENT=1; fi
+WEB_SERVER_LABEL=$WEB_SERVER
+if [ "$REMOTE_MODE" -eq 1 ] && [ "$WEB_SERVER" != none ]; then
+    if [ "$WEB_SERVER_WAS_PRESENT" -eq 1 ]; then WEB_SERVER_LABEL="$WEB_SERVER (detected; reused)"
+    else WEB_SERVER_LABEL="$WEB_SERVER (selected for provisioning; not installed)"; fi
+fi
 case "$WEB_SERVER:$PKG_MANAGER" in
     nginx:*) WEB_SERVER_PACKAGE=nginx; WEB_SERVER_SERVICE=nginx ;;
     apache:apt-get) WEB_SERVER_PACKAGE=apache2; WEB_SERVER_SERVICE=apache2 ;;
@@ -168,14 +173,13 @@ SERVICE_COMMAND="${ATUM_SERVICE_COMMAND:-systemctl}"
 REMOTE_MISSING=""
 remote_requirements() {
     REMOTE_MISSING=""
-    [ "$KERNEL" = Linux ] || REMOTE_MISSING="$REMOTE_MISSING Linux host"
-    command -v systemctl >/dev/null 2>&1 || REMOTE_MISSING="$REMOTE_MISSING systemd"
-    command -v openssl >/dev/null 2>&1 || REMOTE_MISSING="$REMOTE_MISSING openssl"
-    [ "$PHP_OK" -eq 1 ] || REMOTE_MISSING="$REMOTE_MISSING PHP 8.2 or newer CLI"
+    [ "$KERNEL" = Linux ] || REMOTE_MISSING="${REMOTE_MISSING}${REMOTE_MISSING:+|}Linux host"
+    command -v systemctl >/dev/null 2>&1 || REMOTE_MISSING="${REMOTE_MISSING}${REMOTE_MISSING:+|}systemd"
+    command -v openssl >/dev/null 2>&1 || REMOTE_MISSING="${REMOTE_MISSING}${REMOTE_MISSING:+|}openssl"
     if [ "$WEB_SERVER" = nginx ]; then
-        command -v nginx >/dev/null 2>&1 || REMOTE_MISSING="$REMOTE_MISSING Nginx"
+        command -v nginx >/dev/null 2>&1 || REMOTE_MISSING="${REMOTE_MISSING}${REMOTE_MISSING:+|}Nginx"
     else
-        command -v apache2 >/dev/null 2>&1 || command -v httpd >/dev/null 2>&1 || REMOTE_MISSING="$REMOTE_MISSING Apache"
+        command -v apache2 >/dev/null 2>&1 || command -v httpd >/dev/null 2>&1 || REMOTE_MISSING="${REMOTE_MISSING}${REMOTE_MISSING:+|}Apache"
     fi
     if [ "$PHP_OK" -eq 1 ]; then
         PHP_MM=$(php -r 'echo PHP_MAJOR_VERSION,".",PHP_MINOR_VERSION;' 2>/dev/null || true)
@@ -185,14 +189,14 @@ remote_requirements() {
                 FPM_BINARY=$(command -v "$candidate" 2>/dev/null || true); [ -z "$FPM_BINARY" ] || break
             done
         fi
-        [ -n "$FPM_BINARY" ] || REMOTE_MISSING="$REMOTE_MISSING PHP-FPM"
+        [ -n "$FPM_BINARY" ] || REMOTE_MISSING="${REMOTE_MISSING}${REMOTE_MISSING:+|}PHP-FPM"
         if [ -n "$FPM_BINARY" ]; then
             FPM_VERSION=$($FPM_BINARY -v 2>&1 | sed -n 's/^PHP \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -n1)
             [ -n "$FPM_VERSION" ] || FPM_VERSION=$PHP_MM
-            [ "$FPM_VERSION" = "$PHP_MM" ] || REMOTE_MISSING="$REMOTE_MISSING matching PHP-FPM"
+            [ "$FPM_VERSION" = "$PHP_MM" ] || REMOTE_MISSING="${REMOTE_MISSING}${REMOTE_MISSING:+|}matching PHP-FPM"
         fi
     else
-        REMOTE_MISSING="$REMOTE_MISSING PHP-FPM (cannot evaluate until PHP is installed)"
+        REMOTE_MISSING="${REMOTE_MISSING}${REMOTE_MISSING:+|}PHP-FPM cannot be evaluated until PHP is installed"
     fi
 }
 
@@ -311,7 +315,7 @@ say "WARNING          : DEVELOPMENT PREVIEW - NOT SUITABLE FOR PRODUCTION"
 say "Operating system : $OS_NAME"
 say "Package manager  : ${PKG_MANAGER:-not detected}"
 say "Service manager  : $SERVICE_MANAGER"
-say "Web server       : $WEB_SERVER$([ "$REMOTE_MODE" -eq 1 ] && printf '%s' ' (remote development configuration requested)' || true)"
+say "Web server       : $WEB_SERVER_LABEL$([ "$REMOTE_MODE" -eq 1 ] && printf '%s' ' (remote development configuration requested)' || true)"
 say "PHP              : $PHP_VERSION (minimum $ATUM_MIN_PHP)"
 say "PHP-FPM          : ${FPM_BINARY:-missing}"
 say "Missing PHP ext  : ${MISSING_EXT:-unavailable until PHP is installed}"
@@ -328,15 +332,15 @@ say ""
 if [ "$CHECK_ONLY" -eq 1 ]; then
     CHECK_MISSING=""
     for utility in flock groupadd useradd; do
-        command -v "$utility" >/dev/null 2>&1 || CHECK_MISSING="$CHECK_MISSING $utility"
+        command -v "$utility" >/dev/null 2>&1 || CHECK_MISSING="${CHECK_MISSING}${CHECK_MISSING:+|}${utility}"
     done
-    [ "$PHP_OK" -eq 1 ] || CHECK_MISSING="$CHECK_MISSING PHP 8.2 or newer CLI"
-    [ -z "$MISSING_EXT" ] || CHECK_MISSING="$CHECK_MISSING PHP extensions:$MISSING_EXT"
-    [ -n "$KAMAILIO_CONFIG" ] || [ "$ALLOW_NO_KAMAILIO" -eq 1 ] || CHECK_MISSING="$CHECK_MISSING Kamailio configuration"
-    CHECK_MISSING="$CHECK_MISSING $REMOTE_MISSING"
-    if [ -n "$(printf '%s' "$CHECK_MISSING" | tr -d ' ')" ]; then
+    [ "$PHP_OK" -eq 1 ] || CHECK_MISSING="${CHECK_MISSING}${CHECK_MISSING:+|}PHP 8.2 or newer CLI"
+    [ -z "$MISSING_EXT" ] || CHECK_MISSING="${CHECK_MISSING}${CHECK_MISSING:+|}PHP extensions:$MISSING_EXT"
+    [ -n "$KAMAILIO_CONFIG" ] || [ "$ALLOW_NO_KAMAILIO" -eq 1 ] || CHECK_MISSING="${CHECK_MISSING}${CHECK_MISSING:+|}Kamailio configuration"
+    CHECK_MISSING="${CHECK_MISSING}${CHECK_MISSING:+|}${REMOTE_MISSING}"
+    if [ -n "$CHECK_MISSING" ]; then
         say "Missing requirements:"
-        for requirement in $CHECK_MISSING; do say "- $requirement"; done
+        printf '%s\n' "$CHECK_MISSING" | tr '|' '\n' | while IFS= read -r requirement; do [ -z "$requirement" ] || say "- $requirement"; done
         fail "Pre-flight failed: one or more requirements are missing."
     fi
     exit 0
@@ -648,12 +652,12 @@ if [ "$REMOTE_MODE" -eq 1 ]; then
         command -v apache2 >/dev/null 2>&1 || command -v httpd >/dev/null 2>&1 || remote_packages="$remote_packages $([ "$PKG_MANAGER" = apt-get ] && printf '%s' apache2 || printf '%s' httpd)"
     fi
     remote_requirements
-    case " $REMOTE_MISSING " in *" PHP-FPM "*|*" matching PHP-FPM "*)
+    case "$REMOTE_MISSING" in *PHP-FPM*|*matching\ PHP-FPM*)
         case "$PKG_MANAGER" in apt-get) remote_packages="$remote_packages php-fpm" ;; dnf|yum) remote_packages="$remote_packages php-fpm php-pdo" ;; esac ;;
     esac
     [ -z "$remote_packages" ] || install_packages $remote_packages || fail "Remote development dependencies are missing; rerun without --no-deps to install native packages."
     remote_requirements
-    [ -z "$REMOTE_MISSING" ] || fail "Remote development requirements remain unsatisfied:$REMOTE_MISSING"
+    [ -z "$REMOTE_MISSING" ] || fail "Remote development requirements remain unsatisfied: $(printf '%s' "$REMOTE_MISSING" | tr '|' ',')"
     configure_remote
 fi
 
