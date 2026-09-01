@@ -7,13 +7,12 @@ TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/atum-preflight.XXXXXX")
 cleanup() { rm -rf "$TEST_ROOT"; }
 trap cleanup EXIT HUP INT TERM
 
-REAL_PHP=$(command -v php)
 REAL_OPENSSL=$(command -v openssl)
 REAL_SYSTEMCTL=$(command -v systemctl)
 REAL_FLOCK=$(command -v flock)
 REAL_GROUPADD=$(command -v groupadd)
 REAL_USERADD=$(command -v useradd)
-PHP_MM=$(php -r 'echo PHP_MAJOR_VERSION,".",PHP_MINOR_VERSION;')
+PHP_MM=8.4
 
 run_case() {
     name=$1
@@ -24,10 +23,21 @@ run_case() {
     scope=${6:-remote}
     case_root="$TEST_ROOT/$name"
     mkdir -p "$case_root/bin" "$case_root/nginx" "$case_root/apache-available" "$case_root/apache-enabled" "$case_root/fpm"
-    [ "$missing" = php ] || ln -s "$REAL_PHP" "$case_root/bin/php"
+    if [ "$missing" != php ]; then
+        printf '%s\n' '#!/bin/sh' \
+            'case "$2" in' \
+            '*PHP_VERSION*) echo 8.4.0 ;;' \
+            '*version_compare*) exit 0 ;;' \
+            '*PHP_MAJOR_VERSION*) echo 8.4 ;;' \
+            '*extension_loaded*) exit 0 ;;' \
+            '*filter_var*) exit 0 ;;' \
+            '*) exit 0 ;;' \
+            'esac' > "$case_root/bin/php"
+        chmod 0755 "$case_root/bin/php"
+    fi
     ln -s "$REAL_OPENSSL" "$case_root/bin/openssl"
     ln -s "$REAL_SYSTEMCTL" "$case_root/bin/systemctl"
-    for utility in dirname uname sed head getent; do
+    for utility in dirname uname sed head getent tr; do
         ln -s "$(command -v "$utility")" "$case_root/bin/$utility"
     done
     [ "$missing" = flock ] || ln -s "$REAL_FLOCK" "$case_root/bin/flock"
@@ -65,10 +75,10 @@ run_case() {
         missing)
             [ "$status" -ne 0 ] || { echo "$name unexpectedly passed" >&2; exit 1; }
             if [ "$missing" = php ]; then
-                grep -q 'requires PHP 8.2 or newer CLI' "$case_root/output"
-                ! grep -q 'listen-address' "$case_root/output"
+                grep -q 'PHP              : missing' "$case_root/output"
+                [ "$scope" != remote ] || [ "$servers" != none ] || grep -q -- '- Nginx' "$case_root/output"
             else
-                grep -q "requires $missing" "$case_root/output"
+                grep -q -- "- $missing" "$case_root/output"
             fi
             ;;
     esac
@@ -83,6 +93,7 @@ run_case missing-flock nginx '' missing flock
 run_case missing-groupadd nginx '' missing groupadd
 run_case missing-useradd nginx '' missing useradd
 run_case missing-php-remote nginx '' missing php
+run_case missing-php-web-remote none '' missing php
 run_case missing-flock-local none '' missing flock local
 run_case missing-groupadd-local none '' missing groupadd local
 run_case missing-useradd-local none '' missing useradd local

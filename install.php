@@ -51,6 +51,7 @@ $options = [
     'fpm-binary' => '',
     'web-config-test-binary' => '',
     'web-config-test-argument' => '',
+    'start-web-service' => '0',
     'service-command' => 'systemctl',
     'openssl' => 'openssl',
 ];
@@ -82,6 +83,7 @@ if (!preg_match('/^[a-f0-9]{32}$/', $installId)) { throw new RuntimeException('I
 $transactionDir = rtrim($options['transaction-dir'], '/');
 $remoteDeployment = null;
 $remoteIntegration = null;
+    $disabledDefaultSites = [];
 
 $kamailioSnapshot = [];
 $snapshotScope = ['scope' => 'no Kamailio configuration selected', 'confidence' => 'none', 'effective_configuration_proven' => false];
@@ -314,9 +316,19 @@ try {
             'fpm-binary' => $options['fpm-binary'],
             'web-config-test-binary' => $options['web-config-test-binary'],
             'web-config-test-argument' => $options['web-config-test-argument'],
+            'start-web-service' => $options['start-web-service'],
             'service-command' => $options['service-command'],
             'openssl' => $options['openssl'],
         ]);
+        foreach (glob($transactionDir . '/web-default-disabled-*') ?: [] as $record) {
+            $lines = file($record, FILE_IGNORE_NEW_LINES);
+            if (!is_array($lines) || count($lines) !== 2
+                || !preg_match('#^/[A-Za-z0-9._/-]+$#', $lines[0])
+                || !in_array($lines[1], ['../sites-available/default', '/etc/nginx/sites-available/default', '../sites-available/000-default.conf', '/etc/apache2/sites-available/000-default.conf'], true)) {
+                throw new RuntimeException('Invalid disabled default-site record in installation journal.');
+            }
+            $disabledDefaultSites[] = ['path' => $lines[0], 'target' => $lines[1]];
+        }
     }
 
     $kamailioFiles = [];
@@ -362,6 +374,7 @@ try {
             'services' => [],
             'created_files' => $remoteIntegration['created_files'] ?? [],
             'modified_files' => [],
+            'disabled_default_sites' => $disabledDefaultSites,
             'reload_services' => $remoteIntegration['reload_services'] ?? [],
         ],
         'remote_development' => $remoteIntegration === null ? null : [

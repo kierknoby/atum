@@ -99,7 +99,8 @@ final class AtumRemoteDeployment
                 throw new RuntimeException('Unable to journal a service reload.');
             }
             chmod($record, 0600);
-            $this->service($options['service-command'] ?? 'systemctl', 'reload', $service);
+            $action = $service === $options['web-service'] && ($options['start-web-service'] ?? '0') === '1' ? 'start' : 'reload';
+            $this->service($options['service-command'] ?? 'systemctl', $action, $service);
         }
 
         return [

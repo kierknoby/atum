@@ -127,8 +127,9 @@ export ATUM_WEB_CONFIG_TEST_BINARY="$TEST_ROOT/bin/php-fpm-test"
 mkdir -p "$TEST_ROOT/remote" "$TEST_ROOT/host/nginx" "$TEST_ROOT/host/fpm" "$TEST_ROOT/host/run" "$TEST_ROOT/bin"
 test_php_mm=$(php -r 'echo PHP_MAJOR_VERSION,".",PHP_MINOR_VERSION;')
 printf '%s\n' '#!/bin/sh' "echo \"PHP $test_php_mm.0 (fpm-fcgi)\"" > "$ATUM_FPM_BINARY"
+printf '%s\n' '#!/bin/sh' 'exit 0' > "$TEST_ROOT/bin/nginx"
 printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$*" >> "'"$TEST_ROOT"'/service-actions"' > "$ATUM_SERVICE_COMMAND"
-chmod 0755 "$ATUM_FPM_BINARY" "$ATUM_SERVICE_COMMAND"
+chmod 0755 "$ATUM_FPM_BINARY" "$ATUM_SERVICE_COMMAND" "$TEST_ROOT/bin/nginx"
 printf '%s\n' 'pre-existing host configuration' > "$TEST_ROOT/host/nginx/operator.conf"
 # Model interruption after a remote host file was created but before ledger commit.
 remote_install_id=abcdefabcdefabcdefabcdefabcdefab
@@ -143,8 +144,8 @@ printf '%s\n' 'interrupted Atum FPM configuration' > "$ATUM_FPM_POOL_DIR/atum.co
 interrupted_hash=$(sha256sum "$ATUM_FPM_POOL_DIR/atum.conf" | awk '{print $1}')
 printf '%s\n%s\n%s\n' file "$ATUM_FPM_POOL_DIR/atum.conf" "$interrupted_hash" > "$ATUM_TRANSACTION_DIR/host-created-1"
 printf '%s\n' php-test-fpm > "$ATUM_TRANSACTION_DIR/reload-service-1"
-"$ROOT/install" --remote --allow-no-kamailio --no-deps --yes >"$TEST_ROOT/remote-no-development.out" 2>&1 && { echo 'remote mode accepted without --development' >&2; exit 1; }
-"$ROOT/install" --development --remote --allow-no-kamailio --no-deps --yes > "$TEST_ROOT/remote-install.out"
+PATH="$TEST_ROOT/bin:$PATH" "$ROOT/install" --remote --allow-no-kamailio --no-deps --yes >"$TEST_ROOT/remote-no-development.out" 2>&1 && { echo 'remote mode accepted without --development' >&2; exit 1; }
+PATH="$TEST_ROOT/bin:$PATH" "$ROOT/install" --development --remote --allow-no-kamailio --no-deps --yes > "$TEST_ROOT/remote-install.out"
 grep -q 'Recovering interrupted Atum installation' "$TEST_ROOT/remote-install.out"
 grep -q 'NOT SUITABLE FOR PRODUCTION' "$TEST_ROOT/remote-install.out"
 grep -q 'No firewall rules were changed' "$TEST_ROOT/remote-install.out"

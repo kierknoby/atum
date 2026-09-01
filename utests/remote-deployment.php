@@ -46,6 +46,7 @@ try {
         'fpm-config' => $paths['host'] . '/atum-fpm.conf', 'fpm-socket' => '/run/php/atum-fpm.sock',
         'fpm-service' => 'php8.3-fpm', 'fpm-binary' => $service,
         'web-config-test-binary' => $service, 'web-config-test-argument' => '-t',
+        'start-web-service' => '1',
         'service-command' => $service, 'openssl' => '/usr/bin/openssl',
     ]);
     expect(($result['web_server'] ?? '') === 'nginx', 'Remote deployment did not report Nginx.');
@@ -63,7 +64,7 @@ try {
     expect(count(glob($paths['transaction'] . '/host-created-*') ?: []) === 4, 'Remote artefacts were not provisionally journalled.');
     $commands = (string) file_get_contents($temporary . '/services.log');
     expect(substr_count($commands, '-t') >= 2, 'Native-style PHP-FPM and Nginx configuration validation did not run.');
-    expect(str_contains($commands, 'reload nginx') && str_contains($commands, 'reload php8.3-fpm'), 'Required services were not reloaded.');
+    expect(str_contains($commands, 'start nginx') && str_contains($commands, 'reload php8.3-fpm'), 'New web server was not started only after validation.');
     expect(!preg_match('/\b(ufw|firewall-cmd|iptables|nft)\b/', $commands), 'A firewall command was executed.');
 
     // Changed administrator-owned host configuration must survive rollback.

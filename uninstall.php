@@ -183,6 +183,22 @@ if (!is_array($preflightCreatedHostFiles)) {
     throw new RuntimeException('Invalid created-file records in install ledger.');
 }
 
+$disabledDefaultSites = $ledger['host_integrations']['disabled_default_sites'] ?? [];
+if (!is_array($disabledDefaultSites)) {
+    throw new RuntimeException('Invalid disabled default-site records in install ledger.');
+}
+foreach ($disabledDefaultSites as $entry) {
+    $path = (string) ($entry['path'] ?? '');
+    $target = (string) ($entry['target'] ?? '');
+    if (!preg_match('#^/[A-Za-z0-9._/-]+$#', $path)
+        || !in_array($target, ['../sites-available/default', '/etc/nginx/sites-available/default', '../sites-available/000-default.conf', '/etc/apache2/sites-available/000-default.conf'], true)) {
+        throw new RuntimeException('Invalid disabled default-site record in install ledger.');
+    }
+    if (file_exists($path) || is_link($path)) {
+        throw new RuntimeException('Default web-server site changed after Atum disabled it; refusing to overwrite it: ' . $path);
+    }
+}
+
 foreach ($preflightCreatedHostFiles as $entry) {
     $path = (string) ($entry['path'] ?? '');
     $type = (string) ($entry['type'] ?? '');
@@ -339,6 +355,12 @@ foreach ($createdHostFiles as $entry) {
         if (!is_file($path) || is_link($path)) { continue; }
     }
     unlink($path);
+}
+
+foreach ($disabledDefaultSites as $entry) {
+    if (!symlink((string) $entry['target'], (string) $entry['path'])) {
+        throw new RuntimeException('Unable to restore package default web-server site: ' . $entry['path']);
+    }
 }
 
 // Shared services are reloaded, never removed. A failed reload leaves the

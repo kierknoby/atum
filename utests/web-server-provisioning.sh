@@ -1,0 +1,161 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/atum-web-provisioning.XXXXXX")
+cleanup() { rm -rf "$TEST_ROOT"; }
+trap cleanup EXIT HUP INT TERM
+
+make_case() {
+    name=$1
+    server=$2
+    existing=$3
+    fpm_version=${4:-8.4}
+    case_root="$TEST_ROOT/$name"
+    mkdir -p "$case_root/bin" "$case_root/packages" "$case_root/nginx/sites-available" "$case_root/nginx/sites-enabled" "$case_root/apache/sites-available" "$case_root/apache/sites-enabled" "$case_root/fpm" "$case_root/run"
+    chmod 0700 "$case_root"
+    cat > "$case_root/bin/php" <<EOF
+#!/bin/sh
+case "\$1" in
+    -r)
+        case "\$2" in
+            *PHP_VERSION*) echo 8.4.0 ;;
+            *version_compare*|*extension_loaded*|*filter_var*) exit 0 ;;
+            *PHP_MAJOR_VERSION*) echo 8.4 ;;
+        esac
+        ;;
+    *) printf '%s\n' "\$@" > "$case_root/php-arguments" ;;
+esac
+EOF
+    cat > "$case_root/bin/dpkg-query" <<EOF
+#!/bin/sh
+cat "$case_root/packages/installed" 2>/dev/null || true
+EOF
+    cat > "$case_root/bin/apt-get" <<EOF
+#!/bin/sh
+[ "\$1" = update ] && exit 0
+printf '%s\n' "\$@" >> "$case_root/apt.log"
+for package in "\$@"; do
+    case "\$package" in
+        nginx)
+            printf '%s\n' nginx >> "$case_root/packages/installed"
+            printf '%s\n' '#!/bin/sh' 'exit 0' > "$case_root/bin/nginx"; chmod 0755 "$case_root/bin/nginx"
+            ln -s ../sites-available/default "$case_root/nginx/sites-enabled/default"
+            ;;
+        apache2)
+            printf '%s\n' apache2 >> "$case_root/packages/installed"
+            printf '%s\n' '#!/bin/sh' 'exit 0' > "$case_root/bin/apache2"; chmod 0755 "$case_root/bin/apache2"
+            ln -s ../sites-available/000-default.conf "$case_root/apache/sites-enabled/000-default.conf"
+            ;;
+        php-fpm)
+            printf '%s\n' php-fpm >> "$case_root/packages/installed"
+            printf '%s\n' '#!/bin/sh' 'echo "PHP $fpm_version.0 (fpm-fcgi)"' > "$case_root/bin/php-fpm8.4"; chmod 0755 "$case_root/bin/php-fpm8.4"
+            ;;
+        php-*) printf '%s\n' "\$package" >> "$case_root/packages/installed" ;;
+    esac
+done
+EOF
+    ln -s apt-get "$case_root/bin/dnf"
+    ln -s apt-get "$case_root/bin/yum"
+    cat > "$case_root/bin/systemctl" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$case_root/services.log"
+EOF
+    printf '%s\n' '#!/bin/sh' '[ "$1" = -u ] && { echo 0; exit 0; }' 'exit 1' > "$case_root/bin/id"
+    printf '%s\n' '#!/bin/sh' 'exit 1' > "$case_root/bin/getent"
+    for utility in groupadd useradd groupdel userdel; do printf '%s\n' '#!/bin/sh' 'exit 0' > "$case_root/bin/$utility"; chmod 0755 "$case_root/bin/$utility"; done
+    printf '%s\n' '#!/bin/sh' 'case "$*" in *"^atum:"*) exit 1 ;; *) exec /usr/bin/grep "$@" ;; esac' > "$case_root/bin/grep"
+    printf '%s\n' '#!/bin/sh' 'exit 0' > "$case_root/bin/openssl"
+    chmod 0755 "$case_root/bin/apt-get" "$case_root/bin/dpkg-query" "$case_root/bin/systemctl" "$case_root/bin/php" "$case_root/bin/openssl" "$case_root/bin/id" "$case_root/bin/getent" "$case_root/bin/grep"
+    if [ "$existing" = yes ]; then
+        case "$server" in
+            nginx)
+                printf '%s\n' nginx > "$case_root/packages/installed"
+                printf '%s\n' '#!/bin/sh' 'exit 0' > "$case_root/bin/nginx"; chmod 0755 "$case_root/bin/nginx"
+                ln -s ../sites-available/default "$case_root/nginx/sites-enabled/default"
+                ;;
+            apache)
+                printf '%s\n' apache2 > "$case_root/packages/installed"
+                printf '%s\n' '#!/bin/sh' 'exit 0' > "$case_root/bin/apache2"; chmod 0755 "$case_root/bin/apache2"
+                ln -s ../sites-available/000-default.conf "$case_root/apache/sites-enabled/000-default.conf"
+                ;;
+        esac
+        printf '%s\n' php-fpm >> "$case_root/packages/installed"
+        printf '%s\n' '#!/bin/sh' 'echo "PHP 8.4.0 (fpm-fcgi)"' > "$case_root/bin/php-fpm8.4"; chmod 0755 "$case_root/bin/php-fpm8.4"
+    fi
+    printf '%s\n' "$case_root"
+}
+
+run_install() {
+    case_root=$1
+    shift
+    PATH="$case_root/bin:$PATH" \
+        ATUM_PREFIX="$case_root/application" ATUM_STATE_DIR="$case_root/state" ATUM_CONFIG_DIR="$case_root/config" ATUM_TRANSACTION_DIR="$case_root/transaction" ATUM_LIFECYCLE_LOCK_PATH="$case_root/lock" \
+        ATUM_NGINX_CONFIG_DIR="$case_root/nginx" ATUM_APACHE_CONFIG_DIR="$case_root/apache/sites-available" ATUM_APACHE_ENABLED_DIR="$case_root/apache/sites-enabled" ATUM_FPM_POOL_DIR="$case_root/fpm" ATUM_FPM_SOCKET="$case_root/run/atum.sock" \
+        ATUM_NGINX_DEFAULT_SITE="$case_root/nginx/sites-enabled/default" ATUM_APACHE_DEFAULT_SITE="$case_root/apache/sites-enabled/000-default.conf" \
+        ATUM_SERVICE_COMMAND="$case_root/bin/systemctl" ATUM_POLICY_RC_D="$case_root/policy-rc.d" \
+        ATUM_PACKAGE_MANAGER="${ATUM_PACKAGE_MANAGER_OVERRIDE:-}" \
+        "$ROOT/install" --development --remote --allow-no-kamailio "$@" > "$case_root/output" 2>&1 || { cat "$case_root/output" >&2; return 1; }
+}
+
+nginx_case=$(make_case nginx-new nginx no)
+run_install "$nginx_case" --yes
+grep -q php-fpm "$nginx_case/apt.log"
+grep -q nginx "$nginx_case/apt.log"
+! [ -e "$nginx_case/policy-rc.d" ]
+! [ -L "$nginx_case/nginx/sites-enabled/default" ]
+grep -q -- '--packages-added=.*nginx' "$nginx_case/php-arguments"
+
+apache_case=$(make_case apache-new apache no)
+run_install "$apache_case" --yes --web-server=apache
+! [ -L "$apache_case/apache/sites-enabled/000-default.conf" ]
+grep -q apache2 "$apache_case/apt.log"
+
+existing_case=$(make_case nginx-existing nginx yes)
+run_install "$existing_case" --yes
+! [ -e "$existing_case/apt.log" ]
+[ -L "$existing_case/nginx/sites-enabled/default" ]
+! grep -q -- '--packages-added=.*nginx' "$existing_case/php-arguments"
+
+existing_apache_case=$(make_case apache-existing apache yes)
+run_install "$existing_apache_case" --yes --web-server=apache
+! [ -e "$existing_apache_case/apt.log" ]
+[ -L "$existing_apache_case/apache/sites-enabled/000-default.conf" ]
+
+rpm_missing_case=$(make_case rpm-missing nginx no)
+if ATUM_PACKAGE_MANAGER_OVERRIDE=dnf run_install "$rpm_missing_case" --yes; then echo 'DNF unexpectedly provisioned a new web server' >&2; exit 1; fi
+grep -q 'implemented only for APT-family systems' "$rpm_missing_case/output"
+! [ -e "$rpm_missing_case/apt.log" ]
+
+rpm_nginx_case=$(make_case rpm-nginx-existing nginx yes)
+ATUM_PACKAGE_MANAGER_OVERRIDE=dnf run_install "$rpm_nginx_case" --yes
+! [ -e "$rpm_nginx_case/apt.log" ]
+
+rpm_apache_case=$(make_case rpm-apache-existing apache yes)
+ATUM_PACKAGE_MANAGER_OVERRIDE=yum run_install "$rpm_apache_case" --yes --web-server=apache
+! [ -e "$rpm_apache_case/apt.log" ]
+
+no_deps_case=$(make_case no-deps nginx no)
+if run_install "$no_deps_case" --no-deps --yes; then echo 'no-deps unexpectedly installed web prerequisites' >&2; exit 1; fi
+! [ -e "$no_deps_case/apt.log" ]
+
+mismatch_case=$(make_case fpm-mismatch nginx no 8.3)
+if run_install "$mismatch_case" --yes; then echo 'mismatched PHP-FPM was accepted' >&2; exit 1; fi
+grep -q 'matching PHP-FPM' "$mismatch_case/output"
+
+failure_case=$(make_case default-site-failure nginx no)
+cat > "$failure_case/bin/rm" <<EOF
+#!/bin/sh
+case "\$1" in
+    "$failure_case/nginx/sites-enabled/default") exit 1 ;;
+    *) exec /bin/rm "\$@" ;;
+esac
+EOF
+chmod 0755 "$failure_case/bin/rm"
+if run_install "$failure_case" --yes; then echo 'default-site removal failure was accepted' >&2; exit 1; fi
+grep -q 'Unable to disable the package default web-server site' "$failure_case/output"
+! [ -e "$failure_case/policy-rc.d" ]
+[ -L "$failure_case/nginx/sites-enabled/default" ]
+
+echo 'PASS  mocked web-server provisioning, default-site safety, reuse, accounting and FPM mismatch'

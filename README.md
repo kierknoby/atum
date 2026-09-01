@@ -26,7 +26,7 @@ Atum v0.1 is intended for development and integration testing against an existin
 - `pdo_sqlite`, `session` and `openssl` PHP extensions are required.
 - Full system installation requires Linux-style `useradd` and `groupadd` commands.
 - Automatic dependency installation is implemented for APT and DNF/YUM package families.
-- Remote development installation requires a systemd-managed Linux host, Nginx or Apache, and PHP-FPM matching the PHP CLI version.
+- Remote development installation requires a systemd-managed Linux host and PHP 8.2 or newer. Atum can offer missing native PHP-FPM and OpenSSL dependencies on supported APT and DNF/YUM systems without adding third-party repositories. Automatic installation of a new Nginx/Apache web server is currently limited to APT-family systems.
 - Ubuntu is exercised by CI for PHP, shell, HTTP and isolated installation lifecycle tests.
 - macOS is exercised by CI for PHP portability only. A real Kamailio installation on macOS has not been validated and the system installer is not claimed to work there.
 - BSD, openSUSE, Alpine, Arch and other Unix-like systems may be recognised during pre-flight but are not currently validated for full installation.
@@ -56,12 +56,12 @@ On an APT host, install it with `sudo apt install git`. On a DNF host, use `sudo
 Remote development access also requires:
 
 - systemd;
-- an existing Nginx or Apache installation;
+- Nginx or Apache (an existing server is reused; Nginx is selected when neither exists);
 - PHP-FPM with the same major and minor version as the PHP CLI;
 - the `openssl` command;
 - deliberate host and cloud firewall rules for the selected administration source address or network.
 
-Atum does not install Kamailio or an unrelated web-server stack. The local built-in development server does not require Nginx, Apache or PHP-FPM and remains restricted to loopback.
+Atum does not install Kamailio or add third-party package repositories. In remote development mode it can install the selected native web server and matching PHP-FPM when permitted on APT-family systems; it never installs a second supported server when one already exists. DNF/YUM systems may reuse an existing supported Nginx/Apache installation, but require the administrator to install one before remote mode is configured. The local built-in development server does not require Nginx, Apache or PHP-FPM and remains restricted to loopback.
 
 ## Installing
 
@@ -103,7 +103,7 @@ sudo ./install --check --remote
 sudo ./install --development --remote
 ```
 
-It remains **NOT SUITABLE FOR PRODUCTION.** The installer uses an existing supported Nginx or Apache installation, creates a dedicated `atum` PHP-FPM pool, and exposes only Atum's `public/` directory over HTTPS. When Atum owns the TLS setup, it generates a self-signed development certificate. The default listen port is 8443.
+It remains **NOT SUITABLE FOR PRODUCTION.** The installer reuses an existing supported Nginx or Apache installation; when neither exists, it selects Nginx by default and can offer to install it from the host's normal package repositories. It creates a dedicated `atum` PHP-FPM pool and exposes only Atum's `public/` directory over HTTPS. When Atum owns the TLS setup, it generates a self-signed development certificate. The default listen port is 8443. It does not modify firewall rules.
 
 After installation, open:
 
@@ -147,7 +147,7 @@ During installation it:
 - follows statically recognisable literal Kamailio includes and imports recursively from the selected root configuration;
 - records SHA-256 hashes of statically recognised literal Kamailio configuration files before installation;
 - records the partial scope and confidence of that snapshot and verifies the same recognised set before commit;
-- installs only missing baseline Atum dependencies when package installation is permitted;
+- installs only missing baseline dependencies from supported native APT or DNF/YUM repositories when package installation is permitted; APT can also install the selected remote-development web server, while DNF/YUM requires an existing one; `--no-deps` prevents this and `--yes` permits non-interactive confirmation;
 - creates a dedicated local `atum` account for the current Linux system-install path;
 - creates the first Atum administrator interactively;
 - stores Atum application, configuration and state separately from Kamailio;

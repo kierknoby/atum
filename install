@@ -111,9 +111,13 @@ elif [ "$KERNEL" = Darwin ]; then
 fi
 
 PKG_MANAGER=""
-for pm in apt-get dnf yum zypper apk pkg brew; do
-    command -v "$pm" >/dev/null 2>&1 && { PKG_MANAGER=$pm; break; }
-done
+if [ -n "${ATUM_PACKAGE_MANAGER:-}" ]; then
+    PKG_MANAGER=$ATUM_PACKAGE_MANAGER
+else
+    for pm in apt-get dnf yum zypper apk pkg brew; do
+        command -v "$pm" >/dev/null 2>&1 && { PKG_MANAGER=$pm; break; }
+    done
+fi
 
 PHP_VERSION=missing
 PHP_OK=0
@@ -121,15 +125,6 @@ if command -v php >/dev/null 2>&1; then
     PHP_VERSION=$(php -r 'echo PHP_VERSION;' 2>/dev/null || echo unknown)
     php -r 'exit(version_compare(PHP_VERSION,"8.2.0",">=")?0:1);' >/dev/null 2>&1 && PHP_OK=1
 fi
-if [ "$CHECK_ONLY" -eq 1 ] && [ "$PHP_OK" -ne 1 ]; then
-    fail "Atum requires PHP 8.2 or newer CLI. Detected: $PHP_VERSION"
-fi
-if [ "$CHECK_ONLY" -eq 1 ]; then
-    command -v flock >/dev/null 2>&1 || fail "System installation requires flock."
-    command -v groupadd >/dev/null 2>&1 || fail "System installation requires groupadd."
-    command -v useradd >/dev/null 2>&1 || fail "System installation requires useradd."
-fi
-
 NGINX_DETECTED=0
 APACHE_DETECTED=0
 command -v nginx >/dev/null 2>&1 && NGINX_DETECTED=1
@@ -145,7 +140,18 @@ elif [ "$NGINX_DETECTED" -eq 1 ]; then
     WEB_SERVER=nginx
 elif [ "$APACHE_DETECTED" -eq 1 ]; then
     WEB_SERVER=apache
+elif [ "$REMOTE_MODE" -eq 1 ]; then
+    WEB_SERVER=nginx
 fi
+WEB_SERVER_WAS_PRESENT=0
+if [ "$WEB_SERVER" = nginx ] && [ "$NGINX_DETECTED" -eq 1 ]; then WEB_SERVER_WAS_PRESENT=1; fi
+if [ "$WEB_SERVER" = apache ] && [ "$APACHE_DETECTED" -eq 1 ]; then WEB_SERVER_WAS_PRESENT=1; fi
+case "$WEB_SERVER:$PKG_MANAGER" in
+    nginx:*) WEB_SERVER_PACKAGE=nginx; WEB_SERVER_SERVICE=nginx ;;
+    apache:apt-get) WEB_SERVER_PACKAGE=apache2; WEB_SERVER_SERVICE=apache2 ;;
+    apache:*) WEB_SERVER_PACKAGE=httpd; WEB_SERVER_SERVICE=httpd ;;
+    *) WEB_SERVER_PACKAGE=""; WEB_SERVER_SERVICE="" ;;
+esac
 
 FPM_BINARY=""
 FPM_VERSION=""
@@ -159,17 +165,43 @@ WEB_ENABLE_LINK=""
 WEB_CONFIG_TEST_BINARY=""
 WEB_CONFIG_TEST_ARGUMENT=""
 SERVICE_COMMAND="${ATUM_SERVICE_COMMAND:-systemctl}"
-if [ "$REMOTE_MODE" -eq 1 ]; then
-    [ "$CHECK_ONLY" -eq 1 ] || [ "$DEVELOPMENT_ACK" -eq 1 ] || fail "Remote access requires the explicit --development acknowledgement."
-    [ "$KERNEL" = Linux ] || fail "Remote development deployment is currently supported only on Linux."
-    command -v systemctl >/dev/null 2>&1 || fail "Remote development currently requires a systemd-managed Linux host."
-    [ "$PHP_OK" -eq 1 ] || fail "Remote development requires a working PHP 8.2 or newer CLI and matching PHP-FPM."
+REMOTE_MISSING=""
+remote_requirements() {
+    REMOTE_MISSING=""
+    [ "$KERNEL" = Linux ] || REMOTE_MISSING="$REMOTE_MISSING Linux host"
+    command -v systemctl >/dev/null 2>&1 || REMOTE_MISSING="$REMOTE_MISSING systemd"
+    command -v openssl >/dev/null 2>&1 || REMOTE_MISSING="$REMOTE_MISSING openssl"
+    [ "$PHP_OK" -eq 1 ] || REMOTE_MISSING="$REMOTE_MISSING PHP 8.2 or newer CLI"
+    if [ "$WEB_SERVER" = nginx ]; then
+        command -v nginx >/dev/null 2>&1 || REMOTE_MISSING="$REMOTE_MISSING Nginx"
+    else
+        command -v apache2 >/dev/null 2>&1 || command -v httpd >/dev/null 2>&1 || REMOTE_MISSING="$REMOTE_MISSING Apache"
+    fi
+    if [ "$PHP_OK" -eq 1 ]; then
+        PHP_MM=$(php -r 'echo PHP_MAJOR_VERSION,".",PHP_MINOR_VERSION;' 2>/dev/null || true)
+        FPM_BINARY=${ATUM_FPM_BINARY:-}
+        if [ -z "$FPM_BINARY" ]; then
+            for candidate in "php-fpm$PHP_MM" "php-fpm${PHP_MM%.*}" php-fpm; do
+                FPM_BINARY=$(command -v "$candidate" 2>/dev/null || true); [ -z "$FPM_BINARY" ] || break
+            done
+        fi
+        [ -n "$FPM_BINARY" ] || REMOTE_MISSING="$REMOTE_MISSING PHP-FPM"
+        if [ -n "$FPM_BINARY" ]; then
+            FPM_VERSION=$($FPM_BINARY -v 2>&1 | sed -n 's/^PHP \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -n1)
+            [ -n "$FPM_VERSION" ] || FPM_VERSION=$PHP_MM
+            [ "$FPM_VERSION" = "$PHP_MM" ] || REMOTE_MISSING="$REMOTE_MISSING matching PHP-FPM"
+        fi
+    else
+        REMOTE_MISSING="$REMOTE_MISSING PHP-FPM (cannot evaluate until PHP is installed)"
+    fi
+}
+
+configure_remote() {
     case "$LISTEN_ADDRESS" in *[!0-9a-fA-F:.]*|'') fail "--listen-address must be a literal IPv4 or IPv6 address." ;; esac
     php -r 'exit(filter_var($argv[1], FILTER_VALIDATE_IP) === false ? 1 : 0);' "$LISTEN_ADDRESS" >/dev/null 2>&1 || fail "--listen-address must be a valid literal IPv4 or IPv6 address."
     case "$LISTEN_PORT" in *[!0-9]*|'') fail "--listen-port must be an integer from 1 to 65535." ;; esac
     [ "$LISTEN_PORT" -ge 1 ] 2>/dev/null && [ "$LISTEN_PORT" -le 65535 ] || fail "--listen-port must be an integer from 1 to 65535."
     command -v openssl >/dev/null 2>&1 || fail "Remote development requires the openssl command to generate its development certificate."
-    [ "$WEB_SERVER" != none ] || fail "Remote development requires an existing supported web server (Nginx or Apache). None was detected."
     if [ "$WEB_SERVER" = nginx ]; then command -v nginx >/dev/null 2>&1 || [ "${ATUM_WEB_SERVER:-}" = nginx ] || fail "Nginx was selected but is not installed."
     else { command -v apache2 >/dev/null 2>&1 || command -v httpd >/dev/null 2>&1 || [ "${ATUM_WEB_SERVER:-}" = apache ]; } || fail "Apache was selected but is not installed."; fi
     PHP_MM=$(php -r 'echo PHP_MAJOR_VERSION,".",PHP_MINOR_VERSION;' 2>/dev/null || true)
@@ -180,7 +212,7 @@ if [ "$REMOTE_MODE" -eq 1 ]; then
             FPM_BINARY=$(command -v "$candidate" 2>/dev/null || true); [ -z "$FPM_BINARY" ] || break
         done
     fi
-    [ -n "$FPM_BINARY" ] || fail "Remote development requires PHP-FPM matching the selected PHP. Install it and rerun; Atum will not install a web stack automatically."
+    [ -n "$FPM_BINARY" ] || fail "Remote development requires PHP-FPM matching the selected PHP."
     case "$FPM_BINARY" in /*) ;; *) fail "PHP-FPM binary must resolve to an absolute path." ;; esac
     [ -x "$FPM_BINARY" ] || fail "PHP-FPM binary is not executable: $FPM_BINARY"
     FPM_VERSION=$($FPM_BINARY -v 2>&1 | sed -n 's/^PHP \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -n1)
@@ -221,7 +253,7 @@ if [ "$REMOTE_MODE" -eq 1 ]; then
     fi
     case "$WEB_CONFIG_TEST_BINARY" in /*) ;; *) fail "Unable to locate an absolute web-server configuration-test command." ;; esac
     [ -x "$WEB_CONFIG_TEST_BINARY" ] || fail "Web-server configuration-test command is not executable: $WEB_CONFIG_TEST_BINARY"
-fi
+}
 
 SERVICE_MANAGER=unknown
 if command -v systemctl >/dev/null 2>&1; then
@@ -254,6 +286,8 @@ if [ "$PHP_OK" -eq 1 ]; then
     done
 fi
 
+[ "$REMOTE_MODE" -eq 0 ] || remote_requirements
+
 DB_SCHEMES=""
 discover_db_schemes() {
     [ "$PHP_OK" -eq 1 ] || return 0
@@ -279,7 +313,8 @@ say "Package manager  : ${PKG_MANAGER:-not detected}"
 say "Service manager  : $SERVICE_MANAGER"
 say "Web server       : $WEB_SERVER$([ "$REMOTE_MODE" -eq 1 ] && printf '%s' ' (remote development configuration requested)' || true)"
 say "PHP              : $PHP_VERSION (minimum $ATUM_MIN_PHP)"
-say "Missing PHP ext  : ${MISSING_EXT:-none}"
+say "PHP-FPM          : ${FPM_BINARY:-missing}"
+say "Missing PHP ext  : ${MISSING_EXT:-unavailable until PHP is installed}"
 say "Kamailio binary  : ${KAMAILIO_BINARY:-not found}"
 say "Kamailio version : $KAMAILIO_VERSION"
 say "Kamailio config  : ${KAMAILIO_CONFIG:-not found}"
@@ -291,10 +326,19 @@ say "Configuration    : $CONFIG_DIR"
 say ""
 
 if [ "$CHECK_ONLY" -eq 1 ]; then
-    [ "$PHP_OK" -eq 1 ] || exit 1
-    [ -z "$MISSING_EXT" ] || exit 1
-    [ -n "$KAMAILIO_CONFIG" ] || [ "$ALLOW_NO_KAMAILIO" -eq 1 ] || exit 1
-    [ "$REMOTE_MODE" -eq 0 ] || { [ "$WEB_SERVER" != none ] && [ -n "$FPM_BINARY" ]; } || exit 1
+    CHECK_MISSING=""
+    for utility in flock groupadd useradd; do
+        command -v "$utility" >/dev/null 2>&1 || CHECK_MISSING="$CHECK_MISSING $utility"
+    done
+    [ "$PHP_OK" -eq 1 ] || CHECK_MISSING="$CHECK_MISSING PHP 8.2 or newer CLI"
+    [ -z "$MISSING_EXT" ] || CHECK_MISSING="$CHECK_MISSING PHP extensions:$MISSING_EXT"
+    [ -n "$KAMAILIO_CONFIG" ] || [ "$ALLOW_NO_KAMAILIO" -eq 1 ] || CHECK_MISSING="$CHECK_MISSING Kamailio configuration"
+    CHECK_MISSING="$CHECK_MISSING $REMOTE_MISSING"
+    if [ -n "$(printf '%s' "$CHECK_MISSING" | tr -d ' ')" ]; then
+        say "Missing requirements:"
+        for requirement in $CHECK_MISSING; do say "- $requirement"; done
+        fail "Pre-flight failed: one or more requirements are missing."
+    fi
     exit 0
 fi
 
@@ -345,6 +389,20 @@ recover_transaction() {
         case "$old_service" in *[!A-Za-z0-9@_.-]*|'') fail "Interrupted-install journal contains an invalid service name." ;; esac
         "$SERVICE_COMMAND" reload "$old_service" >/dev/null 2>&1 || fail "Unable to reload $old_service while recovering interrupted remote installation."
     done
+    for record in "$TRANSACTION_DIR"/package-service-mask-*; do
+        [ -f "$record" ] || continue
+        old_service=$(sed -n '1p' "$record")
+        case "$old_service" in *[!A-Za-z0-9@_.-]*|'') fail "Interrupted-install journal contains an invalid service mask." ;; esac
+        "$SERVICE_COMMAND" unmask "$old_service" >/dev/null 2>&1 || fail "Unable to remove a temporary web-server service mask during recovery."
+    done
+    for record in "$TRANSACTION_DIR"/web-default-disabled-*; do
+        [ -f "$record" ] || continue
+        old_path=$(sed -n '1p' "$record"); old_target=$(sed -n '2p' "$record")
+        case "$old_path:$old_target" in /*:../sites-available/default|/*:/etc/nginx/sites-available/default|/*:../sites-available/000-default.conf|/*:/etc/apache2/sites-available/000-default.conf) ;; *) fail "Interrupted-install journal contains an unsafe default-site record." ;; esac
+        if [ -L "$old_path" ] && [ "$(readlink "$old_path")" = "$old_target" ]; then continue; fi
+        [ ! -e "$old_path" ] && [ ! -L "$old_path" ] || fail "Default site changed after interrupted installation; refusing to restore it: $old_path"
+        ln -s "$old_target" "$old_path" || fail "Unable to restore the default web-server site during recovery."
+    done
     for key in application-stage application state configuration; do
         [ -f "$TRANSACTION_DIR/intended-$key" ] || [ -f "$TRANSACTION_DIR/created-$key" ] || continue
         old_path=$(sed -n '1p' "$TRANSACTION_DIR/$key")
@@ -382,7 +440,7 @@ recover_transaction
 [ ! -e "$PREFIX" ] || fail "Atum is already present at $PREFIX. v0.1 has no supported in-place upgrade path; do not overwrite an installation."
 [ ! -e "$STATE_DIR" ] || fail "Atum state already exists at $STATE_DIR. Refusing to overwrite it."
 [ ! -e "$CONFIG_DIR" ] || fail "Atum configuration already exists at $CONFIG_DIR. Refusing to overwrite it."
-INSTALL_ID=$(openssl rand -hex 16 2>/dev/null || php -r 'echo bin2hex(random_bytes(16));')
+INSTALL_ID=$(openssl rand -hex 16 2>/dev/null || php -r 'echo bin2hex(random_bytes(16));' 2>/dev/null || od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
 mkdir -m 0700 "$TRANSACTION_DIR"
 journal_put() { printf '%s\n' "$2" > "$TRANSACTION_DIR/.$1.tmp"; chmod 0600 "$TRANSACTION_DIR/.$1.tmp"; mv "$TRANSACTION_DIR/.$1.tmp" "$TRANSACTION_DIR/$1"; }
 journal_put install-id "$INSTALL_ID"
@@ -391,6 +449,75 @@ journal_put state "$STATE_DIR"
 journal_put configuration "$CONFIG_DIR"
 chmod 0600 "$TRANSACTION_DIR"/*
 [ -z "$RECOVERED_PACKAGES" ] || printf '%s\n' $RECOVERED_PACKAGES > "$TRANSACTION_DIR/packages-added"
+
+PACKAGE_START_SUPPRESSION=""
+DEFAULT_SITE_RECORD=""
+enable_package_start_suppression() {
+    [ -z "$PACKAGE_START_SUPPRESSION" ] || return 0
+    case "$PKG_MANAGER" in
+        apt-get)
+            policy_rc_d=${ATUM_POLICY_RC_D:-/usr/sbin/policy-rc.d}
+            [ ! -e "$policy_rc_d" ] || fail "Refusing to replace existing package service policy: $policy_rc_d"
+            (umask 077; printf '%s\n' '#!/bin/sh' 'exit 101' > "$policy_rc_d") || fail "Unable to create temporary package service policy."
+            chmod 0700 "$policy_rc_d"
+            PACKAGE_START_SUPPRESSION=$policy_rc_d
+            ;;
+        dnf|yum)
+            "$SERVICE_COMMAND" mask "${WEB_SERVER_SERVICE}.service" || fail "Unable to temporarily mask the newly installed web-server service."
+            PACKAGE_START_SUPPRESSION="mask:${WEB_SERVER_SERVICE}.service"
+            printf '%s\n' "${WEB_SERVER_SERVICE}.service" > "$TRANSACTION_DIR/package-service-mask-1"
+            chmod 0600 "$TRANSACTION_DIR/package-service-mask-1"
+            ;;
+        *) return 0 ;;
+    esac
+    if [ -n "$PACKAGE_START_SUPPRESSION" ] && [ "${PACKAGE_START_SUPPRESSION#mask:}" = "$PACKAGE_START_SUPPRESSION" ]; then
+        printf '%s\n%s\n' transient "$PACKAGE_START_SUPPRESSION" > "$TRANSACTION_DIR/host-created-package-start-suppression"
+        chmod 0600 "$TRANSACTION_DIR/host-created-package-start-suppression"
+    fi
+}
+
+remove_package_start_suppression() {
+    case "$PACKAGE_START_SUPPRESSION" in
+        /*)
+            [ ! -e "$PACKAGE_START_SUPPRESSION" ] || rm -f "$PACKAGE_START_SUPPRESSION" || fail "Unable to remove temporary package service policy."
+            ;;
+        mask:*) "$SERVICE_COMMAND" unmask "${PACKAGE_START_SUPPRESSION#mask:}" || fail "Unable to remove temporary web-server service mask." ;;
+    esac
+    PACKAGE_START_SUPPRESSION=""
+    rm -f "$TRANSACTION_DIR/host-created-package-start-suppression"
+    rm -f "$TRANSACTION_DIR/package-service-mask-1"
+}
+
+restore_default_site() {
+    [ -n "$DEFAULT_SITE_RECORD" ] || return 0
+    default_path=$(sed -n '1p' "$DEFAULT_SITE_RECORD"); default_target=$(sed -n '2p' "$DEFAULT_SITE_RECORD")
+    if [ -L "$default_path" ] && [ "$(readlink "$default_path")" = "$default_target" ]; then DEFAULT_SITE_RECORD=""; return 0; fi
+    [ ! -e "$default_path" ] && [ ! -L "$default_path" ] || fail "Default site changed while restoring failed installation: $default_path"
+    ln -s "$default_target" "$default_path" || fail "Unable to restore default web-server site after failed installation."
+    DEFAULT_SITE_RECORD=""
+}
+
+disable_new_web_server_default_site() {
+    [ "$WEB_SERVER_WAS_PRESENT" -eq 0 ] || return 0
+    case "$WEB_SERVER" in
+        nginx)
+            default_path=${ATUM_NGINX_DEFAULT_SITE:-/etc/nginx/sites-enabled/default}
+            ;;
+        apache)
+            default_path=${ATUM_APACHE_DEFAULT_SITE:-/etc/apache2/sites-enabled/000-default.conf}
+            ;;
+    esac
+    [ -L "$default_path" ] || return 0
+    default_target=$(readlink "$default_path")
+    case "$WEB_SERVER:$default_target" in
+        nginx:../sites-available/default|nginx:/etc/nginx/sites-available/default|apache:../sites-available/000-default.conf|apache:/etc/apache2/sites-available/000-default.conf) ;;
+        *) fail "Refusing to disable a non-standard web-server default site: $default_path" ;;
+    esac
+    DEFAULT_SITE_RECORD="$TRANSACTION_DIR/web-default-disabled-1"
+    printf '%s\n%s\n' "$default_path" "$default_target" > "$DEFAULT_SITE_RECORD"
+    chmod 0600 "$DEFAULT_SITE_RECORD"
+    rm "$default_path" || fail "Unable to disable the package default web-server site."
+}
 
 snapshot_packages() {
     case "$PKG_MANAGER" in
@@ -407,6 +534,8 @@ rollback_install() {
     trap - EXIT HUP INT TERM
     rm -f "$BEFORE" "$AFTER"
     if [ "$status" -ne 0 ] && [ "$INSTALL_COMMITTED" -eq 0 ]; then
+        remove_package_start_suppression || true
+        restore_default_site || true
         [ "$USER_CREATED" -eq 1 ] && command -v userdel >/dev/null 2>&1 && userdel atum >/dev/null 2>&1 || true
         [ "$GROUP_CREATED" -eq 1 ] && command -v groupdel >/dev/null 2>&1 && groupdel atum >/dev/null 2>&1 || true
         [ -z "$PACKAGES_ADDED" ] || say "Retaining packages after failed installation; safe reverse-dependency removal is deferred to recovery: $PACKAGES_ADDED"
@@ -436,33 +565,67 @@ confirm_packages() {
 install_packages() {
     [ "$NO_DEPS" -eq 0 ] || return 1
     confirm_packages "$@" || return 1
+    package_contains_web_server=0
+    for package in "$@"; do
+        [ "$package" = "$WEB_SERVER_PACKAGE" ] && package_contains_web_server=1
+    done
+    if [ "$REMOTE_MODE" -eq 1 ] && [ "$WEB_SERVER_WAS_PRESENT" -eq 0 ] && [ "$package_contains_web_server" -eq 1 ]; then
+        enable_package_start_suppression
+    fi
     case "$PKG_MANAGER" in
         apt-get)
             apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@" || { refresh_packages_added; return 1; }
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@" || { remove_package_start_suppression || true; refresh_packages_added; return 1; }
             ;;
         dnf|yum)
-            "$PKG_MANAGER" install -y "$@" || { refresh_packages_added; return 1; }
+            "$PKG_MANAGER" install -y "$@" || { remove_package_start_suppression || true; refresh_packages_added; return 1; }
             ;;
         *) return 1 ;;
     esac
     refresh_packages_added
+    if [ "$package_contains_web_server" -eq 1 ]; then
+        disable_new_web_server_default_site
+        remove_package_start_suppression
+    fi
 }
 
+if [ "$REMOTE_MODE" -eq 1 ] && [ "$WEB_SERVER_WAS_PRESENT" -eq 0 ] && [ "$NO_DEPS" -eq 0 ]; then
+    case "$PKG_MANAGER" in
+        dnf|yum) fail "Automatic new web-server provisioning is currently implemented only for APT-family systems. Install Nginx or Apache yourself and rerun Atum." ;;
+    esac
+fi
 
 if [ "$PHP_OK" -ne 1 ]; then
     if command -v php >/dev/null 2>&1; then
         fail "PHP $PHP_VERSION is too old. Atum will not add third-party repositories automatically."
     fi
     case "$PKG_MANAGER" in
-        apt-get) install_packages php-cli php-common || fail "Install PHP >= 8.2 and rerun." ;;
-        dnf|yum) install_packages php-cli php-common || fail "Install PHP >= 8.2 and rerun." ;;
+        apt-get)
+            packages="php-cli php-common"
+            if [ "$REMOTE_MODE" -eq 1 ]; then
+                packages="$packages php-fpm php-sqlite3 openssl"
+                [ "$WEB_SERVER" = nginx ] && packages="$packages nginx" || packages="$packages apache2"
+            fi
+            install_packages $packages || fail "Install PHP >= 8.2 and rerun."
+            ;;
+        dnf|yum)
+            packages="php-cli php-common"
+            if [ "$REMOTE_MODE" -eq 1 ]; then
+                packages="$packages php-fpm php-pdo openssl"
+                [ "$WEB_SERVER" = nginx ] && packages="$packages nginx" || packages="$packages httpd"
+            fi
+            install_packages $packages || fail "Install PHP >= 8.2 and rerun."
+            ;;
         *) fail "Install PHP >= 8.2 and rerun." ;;
     esac
 fi
 
+PHP_VERSION=$(php -r 'echo PHP_VERSION;' 2>/dev/null || echo missing)
+PHP_OK=0
+php -r 'exit(version_compare(PHP_VERSION,"8.2.0",">=")?0:1);' >/dev/null 2>&1 && PHP_OK=1
+[ "$PHP_OK" -eq 1 ] || fail "PHP $PHP_VERSION is unsuitable. Atum will not add third-party repositories automatically."
+
 # Re-evaluate required baseline extensions after PHP installation.
-PHP_OK=1
 MISSING_EXT=""
 for ext in pdo_sqlite session openssl; do
     php -r 'exit(extension_loaded($argv[1])?0:1);' "$ext" >/dev/null 2>&1 || MISSING_EXT="$MISSING_EXT $ext"
@@ -475,6 +638,24 @@ for ext in $MISSING_EXT; do
         *) fail "Missing required PHP extension: $ext" ;;
     esac
 done
+
+if [ "$REMOTE_MODE" -eq 1 ]; then
+    remote_packages=""
+    command -v openssl >/dev/null 2>&1 || remote_packages="$remote_packages openssl"
+    if [ "$WEB_SERVER" = nginx ]; then
+        command -v nginx >/dev/null 2>&1 || remote_packages="$remote_packages nginx"
+    else
+        command -v apache2 >/dev/null 2>&1 || command -v httpd >/dev/null 2>&1 || remote_packages="$remote_packages $([ "$PKG_MANAGER" = apt-get ] && printf '%s' apache2 || printf '%s' httpd)"
+    fi
+    remote_requirements
+    case " $REMOTE_MISSING " in *" PHP-FPM "*|*" matching PHP-FPM "*)
+        case "$PKG_MANAGER" in apt-get) remote_packages="$remote_packages php-fpm" ;; dnf|yum) remote_packages="$remote_packages php-fpm php-pdo" ;; esac ;;
+    esac
+    [ -z "$remote_packages" ] || install_packages $remote_packages || fail "Remote development dependencies are missing; rerun without --no-deps to install native packages."
+    remote_requirements
+    [ -z "$REMOTE_MISSING" ] || fail "Remote development requirements remain unsatisfied:$REMOTE_MISSING"
+    configure_remote
+fi
 
 refresh_packages_added
 discover_db_schemes
@@ -519,6 +700,7 @@ ATUM_INSTALL_BOOTSTRAPPED=1 php "$SOURCE_DIR/install.php" \
     --fpm-binary="$FPM_BINARY" \
     --web-config-test-binary="$WEB_CONFIG_TEST_BINARY" \
     --web-config-test-argument="$WEB_CONFIG_TEST_ARGUMENT" \
+    --start-web-service="$([ "$WEB_SERVER_WAS_PRESENT" -eq 0 ] && printf '%s' 1 || printf '%s' 0)" \
     --service-command="$SERVICE_COMMAND" \
     --openssl="$(command -v openssl 2>/dev/null || true)"
 
