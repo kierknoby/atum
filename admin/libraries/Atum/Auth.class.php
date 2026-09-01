@@ -331,9 +331,9 @@ final class AtumAuth
             $db->prepare('UPDATE users SET enabled=:enabled,session_version=session_version+1,updated_at=:updated WHERE id=:id')->execute([
                 ':enabled' => $enabled ? 1 : 0, ':updated' => gmdate(DATE_ATOM), ':id' => $userId,
             ]);
-            $db->commit();
+            $db->exec('COMMIT');
         } catch (Throwable $e) {
-            if ($db->inTransaction()) { $db->rollBack(); }
+            try { $db->exec('ROLLBACK'); } catch (Throwable) { /* transaction may already be closed */ }
             throw $e;
         }
         $this->audit->log('user.' . ($enabled ? 'enable' : 'disable'), 'success', 'user', (string) $userId, (string) $user['username']);
@@ -354,9 +354,9 @@ final class AtumAuth
                 throw new RuntimeException('The last enabled administrator cannot be deleted.');
             }
             $db->prepare('DELETE FROM users WHERE id=:id')->execute([':id' => $userId]);
-            $db->commit();
+            $db->exec('COMMIT');
         } catch (Throwable $e) {
-            if ($db->inTransaction()) { $db->rollBack(); }
+            try { $db->exec('ROLLBACK'); } catch (Throwable) { /* transaction may already be closed */ }
             throw $e;
         }
         $this->audit->log('user.delete', 'success', 'user', (string) $userId, (string) $user['username']);
