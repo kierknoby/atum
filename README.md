@@ -405,7 +405,9 @@ The Discovery module currently identifies:
 
 Discovery fails closed for configuration values. Only a small positive classification of non-secret scalar tuning values is returned; other parameter and define values are redacted before reaching the GUI, AJAX response or CLI output.
 
-Discovery is conservative. Results carry syntactic or conditional confidence. Unknown statements retain useful type and provenance information without exposing their raw content. The scanner does not prove the complete effective configuration or semantically understand every custom syntax.
+Discovery also presents a conservative system interpretation above the detailed inventory. It correlates positively discovered listeners, recognised modules, named routes and include provenance to describe available signalling and routing support. A module load alone is presented as available support, not proof of active use; stronger wording requires corroborating route evidence. Custom routes are grouped by configuration component but their internals are not interpreted.
+
+Discovery is conservative. Results carry syntactic or conditional confidence. Unknown statements retain useful type and provenance information without exposing their raw content. The scanner does not prove the complete effective configuration or semantically understand every custom syntax, so absence statements mean only that no recognised evidence was found in the scanned configuration.
 
 ## Existing Installation Authority
 

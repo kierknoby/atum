@@ -27,6 +27,11 @@ curl -fsS -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/index.php" > "$TEST_DIR
 auth_csrf=$(sed -n 's/.*name="csrf" value="\([^"]*\)".*/\1/p' "$TEST_DIR/page" | head -n1)
 [ -n "$auth_csrf" ]
 curl -fsS -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/index.php?display=discovery" > "$TEST_DIR/discovery-page"
+grep -q 'System interpretation' "$TEST_DIR/discovery-page"
+grep -q 'Discovery confidence' "$TEST_DIR/discovery-page"
+grep -q 'SIP over UDP listening on 0.0.0.0:5060' "$TEST_DIR/discovery-page"
+grep -q 'Configuration composition' "$TEST_DIR/discovery-page"
+grep -q 'Custom routing logic detected' "$TEST_DIR/discovery-page"
 grep -q 'Detected module support' "$TEST_DIR/discovery-page"
 grep -q 'Dispatching and load balancing' "$TEST_DIR/discovery-page"
 grep -q 'Destination selection and load balancing' "$TEST_DIR/discovery-page"

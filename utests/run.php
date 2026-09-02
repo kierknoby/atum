@@ -63,6 +63,23 @@ check(count($presentedModules['sl']['params']) === 3 && $presentedModules['tm'][
 check(AtumKamailioSemantics::recognisedModuleNames() === array_values(array_unique(AtumKamailioSemantics::recognisedModuleNames())), 'recognised module catalogue is deterministic and unique');
 removeFixture($fixture);
 
+$interpretationFixture = sys_get_temp_dir() . '/atum-interpretation-' . bin2hex(random_bytes(5)); mkdir($interpretationFixture, 0700);
+mkdir($interpretationFixture . '/components', 0700);
+file_put_contents($interpretationFixture . '/components/custom-routes.inc', "onreply_route[RTPengine] { return; }\nroute[POLICY] { return; }\nroute[DIALOG_BACKEND] { return; }\n");
+file_put_contents($interpretationFixture . '/kamailio.cfg', "listen=udp:198.51.100.10:5060\nloadmodule \"tm.so\"\nloadmodule \"rr.so\"\nloadmodule \"nathelper.so\"\nloadmodule \"rtpengine.so\"\nloadmodule \"vendor_extension.so\"\ninclude_file \"components/custom-routes.inc\"\nrequest_route { return; }\n");
+$interpretation = (new AtumKamailioSemantics())->present((new AtumKamailioScanner())->scan($interpretationFixture . '/kamailio.cfg'))['presentation']['system'];
+$interpretationFindings = array_column($interpretation['findings'], 'explanation');
+check(in_array('SIP over UDP listening on 198.51.100.10:5060 (non-loopback address).', $interpretationFindings, true), 'listener interpretation identifies SIP transport and non-loopback binding without claiming public reachability');
+check(in_array('RTPengine media handling appears to be configured.', $interpretationFindings, true), 'module plus matching reply route produces stronger configured evidence');
+$rtpengineFinding = array_values(array_filter($interpretation['findings'], static fn(array $finding): bool => $finding['title'] === 'RTPengine media handling'))[0];
+check(count($rtpengineFinding['evidence']) === 2 && str_contains($rtpengineFinding['caveat'], 'does not establish'), 'correlated media finding preserves provenance and does not claim active traffic');
+check(in_array('Stateful transaction handling is available through tm.', $interpretationFindings, true) && str_contains(implode(' ', array_column($interpretation['findings'], 'caveat')), 'does not prove active use'), 'module-only findings remain availability statements');
+check(array_keys($interpretation['routes']['custom_by_component']) === [$interpretationFixture . '/components/custom-routes.inc'] && count($interpretation['routes']['custom_by_component'][$interpretationFixture . '/components/custom-routes.inc']) === 2, 'custom named routes are grouped by included source component');
+check(array_column($interpretation['composition'], 'kind') === ['Main configuration', 'Included configuration'] && $interpretation['composition'][1]['routes'] === 3, 'configuration composition identifies included components and their discovered content');
+check($interpretation['confidence']['level'] === 'partial' && $interpretation['confidence']['unclassified_modules'] === 1 && in_array('No recognised registrar/location modules were found in the scanned configuration.', $interpretation['confidence']['gaps'], true), 'partial confidence exposes unclassified content and conservative absence wording');
+check($interpretation['confidence']['reasons'] === ['conditional preprocessing and custom/KEMI logic are not evaluated'], 'interpretation preserves scanner completeness limitations');
+removeFixture($interpretationFixture);
+
 if (!extension_loaded('pdo_sqlite')) { fwrite(STDERR, "FAIL  pdo_sqlite is mandatory; security tests cannot be skipped\n"); exit(1); }
 $state = sys_get_temp_dir() . '/atum-state-' . bin2hex(random_bytes(5)); mkdir($state, 0700); putenv('ATUM_STATE_DIR=' . $state); putenv('KAMAILIO_CONFIG=' . $root . '/examples/kamailio.cfg');
 require_once $root . '/admin/bootstrap.php'; $atum = Atum::create(); $atum->Modules->installBundled(true);

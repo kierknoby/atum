@@ -3,6 +3,7 @@
 if (!defined('ATUM_IS_AUTH')) { die('No direct script access allowed'); }
 $e = [AtumView::class, 'escape'];
 $modulePresentation = $report['presentation']['modules'] ?? ['capabilities' => [], 'coverage' => ['total' => 0, 'recognised' => 0, 'unclassified' => 0], 'groups' => []];
+$system = $report['presentation']['system'] ?? ['findings' => [], 'listeners' => [], 'routes' => ['groups' => [], 'custom_by_component' => []], 'composition' => [], 'confidence' => ['level' => 'partial', 'scope' => 'unknown', 'reasons' => [], 'gaps' => [], 'unclassified_modules' => 0, 'unknown_statements' => 0, 'warnings' => 0]];
 ?>
 <div class="page-heading">
   <div>
@@ -26,20 +27,90 @@ $modulePresentation = $report['presentation']['modules'] ?? ['capabilities' => [
       <div class="stat"><span>Modules</span><strong><?= count($report['modules']) ?></strong></div>
       <div class="stat"><span>Listeners</span><strong><?= count($report['listeners']) ?></strong></div>
       <div class="stat"><span>Routes</span><strong><?= count($report['routes']) ?></strong></div>
-      <div class="stat"><span>Warnings</span><strong><?= count($report['warnings']) ?></strong></div>
+      <div class="stat"><span>Discovery confidence</span><strong><?= $e(ucfirst((string) $system['confidence']['level'])) ?></strong></div>
     </div>
 
     <section class="panel">
-      <div class="panel-heading"><h2>Listeners</h2></div>
-      <div class="panel-body table-wrap">
-        <table>
-          <thead><tr><th>Listener</th><th>Source</th></tr></thead>
-          <tbody>
-          <?php foreach ($report['listeners'] as $listener): ?>
-            <tr><td><code><?= $e($listener['raw']) ?></code></td><td><?= $e($listener['source']['file']) ?>:<?= (int) $listener['source']['line'] ?></td></tr>
+      <div class="panel-heading"><h2>System interpretation</h2></div>
+      <div class="panel-body interpretation-list">
+        <?php if ($system['findings'] === []): ?>
+          <p class="muted-copy">No conservative system findings can be derived from the scanned configuration.</p>
+        <?php endif; ?>
+        <?php foreach ($system['findings'] as $finding): ?>
+            <article class="interpretation-finding">
+            <h3><?= $e($finding['title']) ?></h3>
+              <p><?= $e($finding['explanation']) ?><?php if ($finding['confidence'] !== 'syntactic'): ?> <small><?= $e(ucfirst((string) $finding['confidence'])) ?> discovery</small><?php endif; ?></p>
+            <?php if ($finding['caveat'] !== ''): ?><p class="finding-caveat"><?= $e($finding['caveat']) ?></p><?php endif; ?>
+            <details class="finding-evidence">
+              <summary>Evidence and provenance</summary>
+              <ul>
+                <?php foreach ($finding['evidence'] as $evidence): ?>
+                  <li><?= $e($evidence['label']) ?> <code><?= $e($evidence['source']['file']) ?>:<?= (int) $evidence['source']['line'] ?></code></li>
+                <?php endforeach; ?>
+              </ul>
+            </details>
+          </article>
+        <?php endforeach; ?>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-heading"><h2>Discovery confidence</h2></div>
+      <div class="panel-body confidence-body">
+        <p><strong><?= $e(ucfirst((string) $system['confidence']['level'])) ?> understanding.</strong> <?= $e($system['confidence']['scope']) ?>; effective runtime configuration is not proven.</p>
+        <?php if ($system['confidence']['gaps'] !== [] || $system['confidence']['reasons'] !== []): ?>
+          <ul class="gap-list">
+            <?php foreach ($system['confidence']['gaps'] as $gap): ?><li><?= $e($gap) ?></li><?php endforeach; ?>
+            <?php foreach ($system['confidence']['reasons'] as $reason): ?><li><?= $e($reason) ?></li><?php endforeach; ?>
+          </ul>
+        <?php endif; ?>
+        <?php if ($system['confidence']['warnings'] > 0): ?><p class="finding-caveat"><?= (int) $system['confidence']['warnings'] ?> scanner warning<?= $system['confidence']['warnings'] === 1 ? '' : 's' ?> remain in the raw discovery result.</p><?php endif; ?>
+      </div>
+    </section>
+
+    <div class="two-column discovery-overview">
+      <section class="panel">
+        <div class="panel-heading"><h2>Listeners and signalling</h2></div>
+        <div class="panel-body">
+          <?php if ($system['listeners'] === []): ?><p class="muted-copy">No safely interpretable listeners were discovered.</p><?php endif; ?>
+          <?php foreach ($system['listeners'] as $listener): ?>
+            <article class="listener-item"><strong><?= $e($listener['label']) ?></strong><span><?= $e($listener['description']) ?></span><small><code><?= $e($listener['source']['file']) ?>:<?= (int) $listener['source']['line'] ?></code></small></article>
           <?php endforeach; ?>
-          </tbody>
-        </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading"><h2>Route structure</h2></div>
+        <div class="panel-body">
+          <?php if ($system['routes']['groups'] === []): ?><p class="muted-copy">No recognised route declarations were discovered.</p><?php endif; ?>
+          <?php foreach ($system['routes']['groups'] as $group): ?>
+            <div class="route-group"><strong><?= $e($group['label']) ?></strong><span><?= count($group['routes']) ?></span>
+              <?php foreach ($group['routes'] as $route): ?><p><code><?= $e($route['name'] ?? 'main') ?></code> <small><?= $e($route['source']['file']) ?>:<?= (int) $route['source']['line'] ?><?= $route['confidence'] === 'syntactic' ? '' : ' · ' . $e(ucfirst((string) $route['confidence'])) ?></small></p><?php endforeach; ?>
+            </div>
+          <?php endforeach; ?>
+          <?php if ($system['routes']['custom_by_component'] !== []): ?>
+            <div class="custom-route-components">
+              <strong>Custom logic by included component</strong>
+              <?php foreach ($system['routes']['custom_by_component'] as $component => $routes): ?>
+                <div><code><?= $e($component) ?></code><?php foreach ($routes as $route): ?> <span><code><?= $e($route['name']) ?></code></span><?php endforeach; ?></div>
+              <?php endforeach; ?>
+            </div>
+          <?php endif; ?>
+        </div>
+      </section>
+    </div>
+
+    <section class="panel">
+      <div class="panel-heading"><h2>Configuration composition</h2></div>
+      <div class="panel-body composition-list">
+        <?php foreach ($system['composition'] as $component): ?>
+          <article class="component-item">
+            <div><strong><?= $e($component['kind']) ?></strong><code><?= $e($component['path']) ?></code>
+              <?php if ($component['included_from'] !== null): ?><small>Included from <?= $e($component['included_from']['file']) ?>:<?= (int) $component['included_from']['line'] ?></small><?php endif; ?>
+            </div>
+            <p><?= (int) $component['routes'] ?> routes · <?= (int) $component['modules'] ?> modules · <?= (int) $component['listeners'] ?> listeners · <?= (int) $component['defines'] ?> defines</p>
+          </article>
+        <?php endforeach; ?>
       </div>
     </section>
 
@@ -132,23 +203,6 @@ $modulePresentation = $report['presentation']['modules'] ?? ['capabilities' => [
       </div>
     </section>
 
-    <section class="panel">
-      <div class="panel-heading"><h2>Routes</h2></div>
-      <div class="panel-body table-wrap">
-        <table>
-          <thead><tr><th>Type</th><th>Name</th><th>Source</th></tr></thead>
-          <tbody>
-          <?php foreach ($report['routes'] as $route): ?>
-            <tr>
-              <td><?= $e($route['type']) ?></td>
-              <td><?= $e($route['name'] ?? 'main') ?></td>
-              <td><?= $e($route['source']['file']) ?>:<?= (int) $route['source']['line'] ?></td>
-            </tr>
-          <?php endforeach; ?>
-          </tbody>
-        </table>
-      </div>
-    </section>
   </div>
 <?php endif; ?>
 <script src="module-asset.php?module=discovery&amp;file=js/discovery.js"></script>
