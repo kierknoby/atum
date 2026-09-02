@@ -121,6 +121,7 @@ $routeReport = (new AtumKamailioScanner())->scan($interpretationFixture . '/kama
 $routeJson = json_encode($routeReport, JSON_UNESCAPED_SLASHES);
 $presentedRouteReport = (new AtumKamailioSemantics())->present($routeReport);
 $interpretation = $presentedRouteReport['presentation']['system'];
+$includedRouteComponent = realpath($interpretationFixture . '/components/custom-routes.inc');
 $requestProcessing = $presentedRouteReport['presentation']['request_processing'];
 $operator = $presentedRouteReport['presentation']['operator'];
 $interpretationFindings = array_column($interpretation['findings'], 'explanation');
@@ -129,7 +130,17 @@ check(in_array('RTPengine media handling appears to be configured.', $interpreta
 $rtpengineFinding = array_values(array_filter($interpretation['findings'], static fn(array $finding): bool => $finding['title'] === 'RTPengine media handling'))[0];
 check(count($rtpengineFinding['evidence']) >= 2 && str_contains($rtpengineFinding['caveat'], 'does not establish'), 'correlated media finding preserves provenance and does not claim active traffic');
 check(in_array('Stateful transaction handling is available through tm.', $interpretationFindings, true) && str_contains(implode(' ', array_column($interpretation['findings'], 'caveat')), 'does not prove active use'), 'module-only findings remain availability statements');
-check(array_keys($interpretation['routes']['custom_by_component']) === [$interpretationFixture . '/components/custom-routes.inc'] && count($interpretation['routes']['custom_by_component'][$interpretationFixture . '/components/custom-routes.inc']) === 4, 'custom named routes are grouped by included source component');
+check(is_string($includedRouteComponent) && array_keys($interpretation['routes']['custom_by_component']) === [$includedRouteComponent] && count($interpretation['routes']['custom_by_component'][$includedRouteComponent] ?? []) === 4, 'custom named routes are grouped by included source component');
+$interpretationAlias = $interpretationFixture . '-alias';
+if (!symlink($interpretationFixture, $interpretationAlias)) { throw new RuntimeException('Unable to create equivalent-path interpretation fixture'); }
+$aliasRouteReport = (new AtumKamailioScanner())->scan($interpretationAlias . '/kamailio.cfg');
+$aliasInterpretation = (new AtumKamailioSemantics())->present($aliasRouteReport)['presentation']['system'];
+check($aliasRouteReport['root'] === $routeReport['root']
+    && $aliasRouteReport['files'] === $routeReport['files']
+    && array_column($aliasRouteReport['includes'], 'resolved') === array_column($routeReport['includes'], 'resolved')
+    && array_column($aliasRouteReport['routes'], 'source') === array_column($routeReport['routes'], 'source')
+    && $aliasInterpretation['routes']['custom_by_component'] === $interpretation['routes']['custom_by_component'], 'equivalent filesystem paths preserve canonical provenance and route grouping');
+unlink($interpretationAlias);
 check(array_column($interpretation['composition'], 'kind') === ['Main configuration', 'Included configuration'] && $interpretation['composition'][1]['routes'] === 7, 'configuration composition identifies included components and their discovered content');
 check($interpretation['confidence']['level'] === 'partial' && $interpretation['confidence']['unclassified_modules'] === 1 && in_array('No recognised registrar/location modules were found in the scanned configuration.', $interpretation['confidence']['gaps'], true), 'partial confidence exposes unclassified content and conservative absence wording');
 check($interpretation['confidence']['reasons'] === ['conditional preprocessing and custom/KEMI logic are not evaluated'], 'interpretation preserves scanner completeness limitations');
