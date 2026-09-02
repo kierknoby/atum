@@ -73,88 +73,6 @@ atum_https_url() {
     printf 'https://<server-address>:%s/\n' "$listen_port"
 }
 
-atum_progress_signal() {
-    progress_status=$1
-    trap - HUP INT TERM
-    if [ -n "${progress_heartbeat_pid:-}" ]; then
-        kill -s TERM "$progress_heartbeat_pid" 2>/dev/null || true
-        wait "$progress_heartbeat_pid" 2>/dev/null || true
-        progress_heartbeat_pid=
-    fi
-    exit "$progress_status"
-}
-
-atum_progress_heartbeat() {
-    heartbeat_started=$1
-    heartbeat_interval=$2
-    heartbeat_last_report=0
-    trap 'exit 0' HUP INT TERM
-    while :; do
-        sleep 0.1
-        heartbeat_now=$(date +%s)
-        heartbeat_elapsed=$((heartbeat_now - heartbeat_started))
-        if [ "$heartbeat_elapsed" -ge $((heartbeat_last_report + heartbeat_interval)) ]; then
-            atum_progress_detail "Working... ${heartbeat_elapsed}s"
-            heartbeat_last_report=$heartbeat_elapsed
-        fi
-    done
-}
-
-atum_progress_stop_heartbeat() {
-    if [ -n "${progress_heartbeat_pid:-}" ]; then
-        kill -s TERM "$progress_heartbeat_pid" 2>/dev/null || true
-        wait "$progress_heartbeat_pid" 2>/dev/null || true
-        progress_heartbeat_pid=
-    fi
-}
-
-atum_progress_detail() {
-    printf '      %s\n' "$1"
-}
-
-atum_run_quiet_with_progress() {
-    progress_output=$1
-    progress_label=$2
-    shift 2
-    [ "${1:-}" = -- ] && shift
-    [ "$#" -gt 0 ] || return 2
-
-    progress_interval=${ATUM_PROGRESS_INTERVAL_SECONDS:-10}
-    case "$progress_interval" in
-        *[!0-9]*|'') progress_interval=10 ;;
-    esac
-    [ "$progress_interval" -gt 0 ] || progress_interval=10
-
-    progress_heartbeat_pid=
-    trap 'atum_progress_signal 129' HUP
-    trap 'atum_progress_signal 130' INT
-    trap 'atum_progress_signal 143' TERM
-
-    progress_started=$(date +%s)
-    atum_progress_detail "$progress_label..."
-    atum_progress_heartbeat "$progress_started" "$progress_interval" &
-    progress_heartbeat_pid=$!
-
-    if "$@" > "$progress_output" 2>&1; then
-        progress_status=0
-    else
-        progress_status=$?
-    fi
-    atum_progress_stop_heartbeat
-    trap - HUP INT TERM
-
-    progress_finished=$(date +%s)
-    progress_elapsed=$((progress_finished - progress_started))
-    if [ "$progress_status" -eq 0 ]; then
-        if [ "$progress_elapsed" -gt 0 ]; then
-            atum_progress_detail "Required packages installed (${progress_elapsed}s)"
-        else
-            atum_progress_detail 'Required packages installed'
-        fi
-    fi
-    return "$progress_status"
-}
-
 atum_print_completion() {
     completion_prefix=$1
     completion_administrator=$2
@@ -192,8 +110,3 @@ atum_print_completion() {
     printf '       DEVELOPMENT PREVIEW - NOT FOR PRODUCTION\n'
     printf '%s\n' "$completion_rule"
 }
-
-if [ "${ATUM_PRESENTATION_COMMAND:-}" = run-quiet ]; then
-    atum_run_quiet_with_progress "$@"
-    exit $?
-fi

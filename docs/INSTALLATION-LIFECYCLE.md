@@ -135,7 +135,7 @@ If the file changed after Atum wrote it, uninstall must stop and report the conf
 
 The installer snapshots package state before installing missing Atum dependencies.
 
-Normal installation presents dependencies as required capabilities and suppresses successful package-manager chatter. While the package-manager child runs, a foreground wrapper emits a plain elapsed-time heartbeat every ten seconds; it preserves the child's exit status and reaps its heartbeat on success, failure or signal. `--verbose` bypasses the wrapper, restores the detailed pre-flight report and streams package-manager output plus remote configuration-validation and service commands/output. If a non-verbose package transaction fails, Atum replays that transaction's complete captured output before its own actionable error; diagnostics are not discarded. `--yes` approves the same package decision without requiring a terminal.
+Normal installation presents dependencies as required capabilities and streams native package-manager stdout and stderr directly between Atum's stage boundaries. There is no synthetic package-install heartbeat. `--verbose` restores the detailed Atum pre-flight report and adds remote configuration-validation and service diagnostics; it is not required to see APT, DNF or YUM output. `--yes` approves the same package decision without requiring a terminal.
 
 Only packages that were absent before Atum and added by the dependency transaction are candidates for removal.
 

@@ -108,8 +108,9 @@ EOF
     cat > "$CASE_ROOT/bin/apt-get" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$@" > "$ATUM_BOOTSTRAP_TEST_ROOT/package.args"
+printf 'mock package-manager stdout\n'
+printf 'mock package-manager stderr\n' >&2
 if [ -f "$ATUM_BOOTSTRAP_TEST_ROOT/package.fail" ]; then
-    printf 'mock package-manager diagnostic\n' >&2
     exit 42
 fi
 /bin/ln -s "$ATUM_BOOTSTRAP_TEST_ROOT/git-command" "$ATUM_BOOTSTRAP_TEST_ROOT/bin/git"
@@ -271,6 +272,10 @@ install
 git
 EOF
 cmp -s "$CASE_ROOT/package.args.expected" "$CASE_ROOT/package.args"
+grep -qx 'mock package-manager stdout' "$CASE_ROOT/stdout"
+grep -qx 'mock package-manager stderr' "$CASE_ROOT/stderr"
+! grep -q 'Working\.\.\.' "$CASE_ROOT/stdout"
+! grep -q 'Working\.\.\.' "$CASE_ROOT/stderr"
 [ "$(wc -l < "$CASE_ROOT/installer.count")" -eq 1 ]
 grep -qx -- '--yes' "$CASE_ROOT/installer.args"
 assert_no_checkout
@@ -292,7 +297,9 @@ new_case package-failure
 run_bootstrap --yes
 [ "$BOOTSTRAP_STATUS" -ne 0 ]
 assert_not_invoked
-grep -q 'mock package-manager diagnostic' "$CASE_ROOT/stderr"
+grep -q 'mock package-manager stdout' "$CASE_ROOT/stdout"
+grep -q 'mock package-manager stderr' "$CASE_ROOT/stderr"
+grep -q 'native package manager could not install Git' "$CASE_ROOT/stderr"
 assert_firewall_unchanged
 
 new_case clone-failure

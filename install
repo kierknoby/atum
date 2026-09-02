@@ -4,7 +4,6 @@ set -eu
 
 ATUM_MIN_PHP="8.2.0"
 SOURCE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-ATUM_PRESENTATION_COMMAND=
 . "$SOURCE_DIR/installer/presentation.sh"
 PREFIX="${ATUM_PREFIX:-/usr/share/atum}"
 STATE_DIR="${ATUM_STATE_DIR:-/var/lib/atum}"
@@ -43,7 +42,7 @@ authoritative installed application file set.
   --check                     pre-flight only; make no changes
   --no-deps                   do not install missing OS packages
   --yes, -y                   answer yes to dependency prompts
-  --verbose                   show detailed pre-flight, package and service output
+  --verbose                   show detailed Atum pre-flight/validation diagnostics
   --prefix=/path              application path (default /usr/share/atum)
   --kamailio-config=/path     existing Kamailio configuration
   --allow-no-kamailio         development install without Kamailio
@@ -594,13 +593,12 @@ BEFORE=$(mktemp)
 AFTER=$(mktemp)
 ENABLED_BEFORE=$(mktemp)
 ENABLED_AFTER=$(mktemp)
-PACKAGE_OUTPUT=$(mktemp)
 ADMINISTRATOR_OUTPUT=$(mktemp)
 snapshot_enabled_units() { "$SERVICE_COMMAND" list-unit-files --state=enabled --no-legend --no-pager 2>/dev/null | awk '{print $1}' | sort -u; }
 rollback_install() {
     status=$?
     trap - EXIT HUP INT TERM
-    rm -f "$BEFORE" "$AFTER" "$ENABLED_BEFORE" "$ENABLED_AFTER" "$PACKAGE_OUTPUT" "$ADMINISTRATOR_OUTPUT"
+    rm -f "$BEFORE" "$AFTER" "$ENABLED_BEFORE" "$ENABLED_AFTER" "$ADMINISTRATOR_OUTPUT"
     if [ "$status" -ne 0 ] && [ "$INSTALL_COMMITTED" -eq 0 ]; then
         remove_package_start_suppression || true
         for record in "$TRANSACTION_DIR"/package-enabled-unit-*; do
@@ -712,30 +710,10 @@ install_packages() {
     fi
     case "$PKG_MANAGER" in
         apt-get)
-            if [ "$VERBOSE" -eq 1 ]; then
-                DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@" || { remove_package_start_suppression || true; refresh_packages_added; return 1; }
-            elif ! ATUM_PRESENTATION_COMMAND=run-quiet "$SOURCE_DIR/installer/presentation.sh" \
-                "$PACKAGE_OUTPUT" "Installing required packages" -- \
-                env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@"; then
-                say "Package installation failed; package-manager output follows:" >&2
-                cat "$PACKAGE_OUTPUT" >&2
-                remove_package_start_suppression || true
-                refresh_packages_added
-                return 1
-            fi
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@" || { remove_package_start_suppression || true; refresh_packages_added; return 1; }
             ;;
         dnf|yum)
-            if [ "$VERBOSE" -eq 1 ]; then
-                "$PKG_MANAGER" install -y "$@" || { remove_package_start_suppression || true; refresh_packages_added; return 1; }
-            elif ! ATUM_PRESENTATION_COMMAND=run-quiet "$SOURCE_DIR/installer/presentation.sh" \
-                "$PACKAGE_OUTPUT" "Installing required packages" -- \
-                "$PKG_MANAGER" install -y "$@"; then
-                say "Package installation failed; package-manager output follows:" >&2
-                cat "$PACKAGE_OUTPUT" >&2
-                remove_package_start_suppression || true
-                refresh_packages_added
-                return 1
-            fi
+            "$PKG_MANAGER" install -y "$@" || { remove_package_start_suppression || true; refresh_packages_added; return 1; }
             ;;
         *) return 1 ;;
     esac

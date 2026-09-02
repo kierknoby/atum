@@ -143,7 +143,7 @@ managers, runtime, web server, Kamailio configuration, paths, bind address and
 missing requirements. A normal installation uses a shorter operator-facing
 summary and staged progress while performing the installation.
 
-Use `--yes` for deterministic non-interactive package approval. Add `--verbose` when diagnosing an install to retain the detailed pre-flight view and stream the underlying package-manager and remote validation/service output:
+Use `--yes` for deterministic non-interactive package approval. Add `--verbose` when diagnosing an install to show the detailed Atum pre-flight view and additional validation/service diagnostics:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/kierknoby/atum/main/bootstrap | sudo sh -s -- --yes
@@ -166,9 +166,7 @@ Preparing remote Atum installation
 [1/6] Checking host
       done
 [2/6] Installing system dependencies
-      Installing required packages...
-      Working... 10s
-      Required packages installed (12s)
+[native package-manager stdout/stderr appears here]
       done
 [6/6] Creating initial administrator
 
@@ -177,9 +175,9 @@ Password:
 Confirm password:
 ```
 
-Detected versions and selected/reused components reflect the actual host. Package decisions are described as capabilities; exact distro package names and underlying command output remain available with `--verbose`. No cursor control or colour support is required.
+Detected versions and selected/reused components reflect the actual host. Package decisions are described as capabilities, and native package-manager output is streamed directly in normal and verbose modes. No cursor control or colour support is required.
 
-While normal-mode package installation is quiet, Atum prints an elapsed-time `Working...` heartbeat every ten seconds until the package-manager command finishes. The final output uses a clearly delimited `ATUM INSTALLATION COMPLETE` block containing the administrator name, prominent access URL in remote mode, verified integration summary, warnings and removal-preview command. `--verbose` streams package-manager output directly instead of using the quiet heartbeat.
+Normal package installation shows the package manager's own progress, warnings and errors between Atum's stage boundaries. `--verbose` is not required to see that output; it adds detailed Atum pre-flight and validation/service diagnostics. The final output uses a clearly delimited `ATUM INSTALLATION COMPLETE` block containing the administrator name, prominent access URL in remote mode, verified integration summary, warnings and removal-preview command.
 
 The checkout is only the installation source. The installer does not modify it and copies only files listed in `install-files.txt`. Git metadata, tests, untracked files and other checkout content are not installed.
 
@@ -251,7 +249,7 @@ Available installer options:
 --check                     pre-flight only; make no changes
 --no-deps                   do not install missing operating-system packages
 --yes, -y                   answer yes to dependency package prompts
---verbose                   show detailed pre-flight, package and service output
+--verbose                   show detailed Atum pre-flight/validation diagnostics
 --prefix=/path              override the application path
 --kamailio-config=/path     use an explicit Kamailio configuration
 --allow-no-kamailio         development install without Kamailio
