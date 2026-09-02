@@ -28,6 +28,7 @@ Atum v0.1 is intended for development and integration testing against an existin
 - Automatic dependency installation is implemented for APT and DNF/YUM package families.
 - Remote development installation requires a systemd-managed Linux host and PHP 8.2 or newer. Atum can offer missing native PHP-FPM and OpenSSL dependencies on supported APT and DNF/YUM systems without adding third-party repositories. Automatic installation of a new Nginx/Apache web server is currently limited to APT-family systems.
 - Ubuntu is exercised by CI for PHP, shell, HTTP and isolated installation lifecycle tests.
+- The current development-preview lifecycle has also been exercised end-to-end on Debian 13 with an existing Kamailio 6.0.1 host. That test covered bootstrap acquisition, native PHP/Nginx provisioning, HTTPS application access, uninstall preview, removal of Atum-added APT dependencies, and successful Atum removal while Kamailio remained operational. This is integration evidence, not production certification or a claim of broad Debian support.
 - macOS is exercised by CI for PHP portability only. A real Kamailio installation on macOS has not been validated and the system installer is not claimed to work there.
 - BSD, openSUSE, Alpine, Arch and other Unix-like systems may be recognised during pre-flight but are not currently validated for full installation.
 - Windows is not a target for the local installation model.
@@ -206,7 +207,24 @@ https://<server-address>:8443/
 
 IPv6 literals are bracketed correctly. The installer does not use an external address-discovery service and does not claim that a host address is publicly reachable. The browser will warn because the generated development certificate is self-signed.
 
-Atum does not change firewall rules and does not alter Kamailio merely by being installed. On a DigitalOcean Droplet, allow the selected Atum port in the DigitalOcean Cloud Firewall or host firewall only from the administrator's trusted public IP or CIDR. DigitalOcean is not required, and Atum does not use its API.
+Allow the selected Atum port in the host firewall and, where applicable, the cloud/provider firewall only from a trusted administration IP or CIDR. Atum does not change firewall rules and does not alter Kamailio merely by being installed.
+
+For example, on a host using UFW that you administer over SSH, permit the default TCP/8443 port only from the source address of the current SSH connection:
+
+```sh
+ADMIN_IP="${SSH_CLIENT%% *}"
+sudo ufw allow from "$ADMIN_IP" to any port 8443 proto tcp
+```
+
+`ADMIN_IP` is the source address of the **current** SSH connection. This is an example for UFW plus SSH, not a universal requirement; administrators using another host firewall or a cloud/provider firewall must apply an equivalent policy themselves. Atum never performs this step automatically.
+
+After installation and the required firewall permission, open:
+
+```text
+https://SERVER_IP:8443/
+```
+
+Use the exact URL printed by the installer when it differs. The self-signed development certificate encrypts traffic, but it does not establish browser trust in the server's identity, so the browser will display a certificate warning.
 
 If both supported web servers are installed, select one explicitly:
 
@@ -267,17 +285,48 @@ Preview removal:
 sudo atum-uninstall --check
 ```
 
-Remove Atum:
+The preview validates the installation ledger and shows the application, configuration and state trees; CLI links; whether the Atum account and group were created by Atum; recorded remote web-server, PHP-FPM and TLS integration; and `Packages added`. Review this plan before removal.
+
+Remove Atum interactively:
 
 ```sh
 sudo atum-uninstall
 ```
 
-The uninstaller uses the root-owned installation ledger and matching installation markers. It does not infer ownership from conventional paths.
+Normal interactive removal asks for confirmation. The uninstaller uses the root-owned installation ledger and matching installation markers; it does not infer ownership from conventional paths.
 
-Removal includes Atum application files, configuration, local users, sessions, audit data, module state, CLI links, the Atum account/group when Atum created them, and exact remote-development integrations recorded by the installer. Dependency removal is conservative. Use `sudo atum-uninstall --keep-dependencies` to retain every operating-system dependency.
+Removal includes Atum application files, configuration, local users, sessions, audit data, module state, CLI links, the Atum account/group when Atum created them, and exact remote-development integrations recorded by the installer.
 
-The uninstaller does not remove the Git checkout, `.git`, untracked checkout files, shared Nginx/Apache/PHP-FPM installations, or Kamailio configuration. It does not revert legitimate Kamailio configuration changes. DNF/YUM dependencies introduced for Atum are retained because safe reverse-dependency proof is not implemented for that path.
+APT dependency removal is conservative. Atum records packages that were absent before installation and introduced by Atum. During uninstall it first simulates purging that recorded set. It purges those packages only when APT shows that no package outside the recorded set would be removed; otherwise it retains the dependencies rather than risk unrelated software. Consequently, an Nginx/PHP/PHP-FPM stack introduced solely for Atum may be removed. A pre-existing or shared Nginx, Apache or PHP-FPM installation is not treated as Atum-owned merely because Atum used it.
+
+On DNF/YUM systems, v0.1 retains Atum-added dependencies because safe reverse-dependency proof is not implemented. To remove Atum while retaining all operating-system dependencies on any supported package family, use:
+
+```sh
+sudo atum-uninstall --keep-dependencies
+```
+
+Git is retained too. If the bootstrap installed Git because it was not already present, Git remains after Atum is uninstalled because it is an acquisition prerequisite installed before the lifecycle ledger exists, not an Atum runtime dependency owned by that ledger. The uninstaller also does not remove a Git checkout, `.git`, or untracked checkout files.
+
+If you created the earlier UFW example rule, remove it after uninstall with:
+
+```sh
+ADMIN_IP="${SSH_CLIENT%% *}"
+sudo ufw delete allow from "$ADMIN_IP" to any port 8443 proto tcp
+```
+
+This deletes the administrator-created example rule. Atum does not delete it because Atum never created or owned it.
+
+After a successful normal uninstall:
+
+- `/usr/share/atum`, `/etc/atum` and `/var/lib/atum` are removed;
+- the Atum CLI links are removed;
+- the Atum account and group are removed if Atum created them;
+- recorded Atum web-server, PHP-FPM and TLS integration is removed;
+- safely removable APT dependencies introduced solely for Atum are removed unless `--keep-dependencies` was used;
+- Git may remain;
+- Kamailio remains installed and configured; Atum does not remove or restore Kamailio configuration; and
+- package-manager logs, journal entries and shell history may naturally remain.
+
 
 ## Repository-local Development
 
