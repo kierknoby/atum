@@ -6,6 +6,12 @@ $modulePresentation = $report['presentation']['modules'] ?? ['capabilities' => [
 $system = $report['presentation']['system'] ?? ['findings' => [], 'listeners' => [], 'routes' => ['groups' => [], 'custom_by_component' => []], 'composition' => [], 'confidence' => ['level' => 'partial', 'scope' => 'unknown', 'reasons' => [], 'gaps' => [], 'unclassified_modules' => 0, 'unknown_statements' => 0, 'warnings' => 0]];
 $requestProcessing = $report['presentation']['request_processing'] ?? ['flows' => [], 'coverage' => ['recognised' => 0, 'custom' => 0, 'unresolved' => 0, 'cycles' => [], 'unreferenced' => []]];
 $operator = $report['presentation']['operator'] ?? ['overview' => [], 'stages' => [], 'connectivity' => [], 'routing' => [], 'media' => [], 'access' => [], 'gaps' => [], 'coverage' => []];
+$media = $report['presentation']['media'] ?? ['available' => false, 'module' => null, 'used_in_flow' => false, 'stages' => [], 'nat_related_count' => 0, 'custom_paths' => 0];
+$sourceLabel = static function (array $source, string $root): string {
+  $file = (string) ($source['file'] ?? '');
+  $line = (int) ($source['line'] ?? 0);
+  return ($file === $root ? 'Main Kamailio configuration' : 'Included configuration: ' . basename($file)) . ($line > 0 ? ', line ' . $line : '');
+};
 ?>
 <div class="page-heading">
   <div>
@@ -51,7 +57,22 @@ $operator = $report['presentation']['operator'] ?? ['overview' => [], 'stages' =
     <?php elseif ($view === 'routing'): ?>
       <section class="panel"><div class="panel-heading"><h2>Routing and destinations</h2></div><div class="panel-body operator-list"><?php if ($operator['routing'] === []): ?><p class="muted-copy">No recognised routing or destination-selection steps were identified.</p><?php endif; ?><?php foreach ($operator['routing'] as $step): ?><article><strong><?= $e($step['meaning']) ?></strong><p><?= ($step['category'] ?? '') === 'dispatching' ? 'Destination data is external to the interpreted configuration.' : 'This step is part of the statically interpreted routing path.' ?></p><details><summary>Technical details</summary><code><?= $e($step['source']['file']) ?>:<?= (int) $step['source']['line'] ?></code></details></article><?php endforeach; ?></div></section>
     <?php elseif ($view === 'media'): ?>
-      <section class="panel"><div class="panel-heading"><h2>Media and NAT handling</h2></div><div class="panel-body operator-list"><?php if ($operator['media'] === []): ?><p class="muted-copy">No recognised media processing was identified in the interpreted route flow. Loaded media support alone does not prove use.</p><?php endif; ?><?php foreach ($operator['media'] as $step): ?><article><strong><?= $e($step['meaning']) ?></strong><p><?= $e($step['route_type'] === 'onreply_route' ? 'This applies to SIP replies.' : 'This appears in request processing.') ?></p><details><summary>Technical details</summary><code><?= $e($step['source']['file']) ?>:<?= (int) $step['source']['line'] ?></code></details></article><?php endforeach; ?></div></section>
+      <section class="media-hero">
+        <h2>Media handling</h2>
+        <?php if (!$media['available']): ?><p>No recognised media relay module was found in the scanned configuration.</p>
+        <?php elseif (!$media['used_in_flow']): ?><p><?= $e((string) ($media['module']['name'] ?? 'Media relay')) ?> is available, but Atum did not identify it in the interpreted call path.</p>
+        <?php else: ?><p>Static configuration indicates that <?= $e((string) ($media['module']['name'] ?? 'the media relay')) ?> participates in the interpreted call path. This does not prove live calls use it.</p><?php endif; ?>
+        <div class="operator-confidence"><strong>Media understanding: <?= $media['custom_paths'] > 0 ? 'Partial' : 'Recognised' ?></strong><span><?= count($media['stages']) ?> lifecycle stages · <?= (int) $media['custom_paths'] ?> conditional or custom paths</span></div>
+      </section>
+      <?php if ($media['stages'] !== []): ?><section class="panel"><div class="panel-heading"><h2>Media lifecycle</h2></div><div class="panel-body media-lifecycle">
+        <?php foreach ($media['stages'] as $stage): ?><article class="media-stage media-stage-<?= $e($stage['key']) ?>"><strong><?= $e($stage['title']) ?></strong><p><?= $e($stage['summary']) ?> <?= (int) $stage['count'] ?> recognised operation<?= $stage['count'] === 1 ? '' : 's' ?>.</p>
+          <ul><?php foreach ($stage['triggers'] as $trigger => $evidence): ?><li><?= $e($trigger) ?> <span><?= count($evidence) ?> path<?= count($evidence) === 1 ? '' : 's' ?></span></li><?php endforeach; ?></ul>
+          <details><summary>Why Atum thinks this</summary><ul><?php foreach ($stage['evidence'] as $evidence): ?><li><?= $e($sourceLabel($evidence['source'], $report['root'])) ?><?= $evidence['nat_related'] ? '; NAT handling is also recognised in this route.' : '' ?></li><?php endforeach; ?></ul>
+            <details><summary>Kamailio evidence</summary><ul><?php foreach ($stage['evidence'] as $evidence): ?><li><code><?= $e($evidence['function']) ?>(...)</code> in <code><?= $e($evidence['route_type']) ?><?= $evidence['route_name'] === null ? '' : '[' . $e($evidence['route_name']) . ']' ?></code>, <?= $e($sourceLabel($evidence['source'], $report['root'])) ?><br><code><?= $e($evidence['source']['file']) ?>:<?= (int) $evidence['source']['line'] ?></code></li><?php endforeach; ?></ul></details>
+          </details>
+        </article><?php endforeach; ?>
+      </div></section><?php endif; ?>
+      <?php if ($media['nat_related_count'] > 0): ?><section class="panel"><div class="panel-heading"><h2>NAT relationship</h2></div><div class="panel-body"><p class="muted-copy">NAT handling is also recognised in <?= (int) $media['nat_related_count'] ?> media-processing path<?= $media['nat_related_count'] === 1 ? '' : 's' ?>. Static interpretation does not establish the exact traversal behavior.</p></div></section><?php endif; ?>
     <?php elseif ($view === 'access'): ?>
       <section class="panel"><div class="panel-heading"><h2>Access and endpoint registration</h2></div><div class="panel-body operator-list"><?php if ($operator['access'] === []): ?><p class="muted-copy">No recognised local endpoint-registration or subscriber-authentication handling was identified in the interpreted configuration. Discovery is partial.</p><?php endif; ?><?php foreach ($operator['access'] as $step): ?><article><strong><?= $e($step['meaning']) ?></strong><details><summary>Technical details</summary><code><?= $e($step['source']['file']) ?>:<?= (int) $step['source']['line'] ?></code></details></article><?php endforeach; ?></div></section>
     <?php endif; ?>

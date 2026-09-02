@@ -409,6 +409,8 @@ Discovery also presents a conservative system interpretation above the detailed 
 
 For a growing, statically recognised subset of common routing constructs, Discovery presents existing Kamailio installations through operator-oriented views: an overview, call flow, connectivity, routing, media, and access/registration. Technical configuration evidence remains available for verification. It shows route entry points, recognised method/in-dialog/IP conditions, static route calls, reply/failure/branch wiring, high-value SIP actions and relay or local-reply termination points. Arguments and custom statements remain redacted. This is static, conservative configuration interpretation, not a compiler or observation of live SIP traffic; arbitrary logic, dynamic route targets and runtime-dependent behavior may remain custom or unresolved. The adopted Kamailio configuration remains authoritative.
 
+The Media view aggregates recognised RTPengine/RTPProxy operations into call setup, reply, established-call and cleanup stages. It identifies cleanup reasons only when a recognised condition or configured failure/reply relationship supports that wording; other cleanup paths remain explicitly unknown. Loaded media support is kept separate from use found in the interpreted route flow.
+
 Discovery is conservative. Results carry syntactic or conditional confidence. Unknown statements retain useful type and provenance information without exposing their raw content. The scanner does not prove the complete effective configuration or semantically understand every custom syntax, so absence statements mean only that no recognised evidence was found in the scanned configuration.
 
 ## Existing Installation Authority

@@ -154,6 +154,55 @@ $conditionStatements = (new AtumKamailioScanner())->scan($conditionFixture . '/k
 check(array_column(array_values(array_filter($conditionStatements, static fn(array $statement): bool => $statement['kind'] === 'condition')), 'meaning') === ['If request method is BYE', 'If source IP equals 192.0.2.10', 'If source port equals 5060'] && array_column(array_values(array_filter($conditionStatements, static fn(array $statement): bool => $statement['kind'] === 'control')), 'control') === ['return', 'return', 'return'], 'common literal method, source IP and source port conditions are interpreted without retaining raw expressions');
 removeFixture($conditionFixture);
 
+$mediaFixture = sys_get_temp_dir() . '/atum-media-' . bin2hex(random_bytes(5)); mkdir($mediaFixture, 0700);
+file_put_contents($mediaFixture . '/kamailio.cfg', <<<'CFG'
+loadmodule "rtpengine.so"
+loadmodule "nathelper.so"
+request_route {
+    t_on_reply("MEDIA_REPLY");
+    t_on_failure("MEDIA_FAILED");
+    if (is_method("INVITE")) {
+        rtpengine_offer("private offer flags");
+        fix_nated_contact();
+    }
+    if (is_method("BYE")) {
+        rtpengine_delete("private cleanup flags");
+    }
+    if (is_method("CANCEL")) {
+        rtpengine_delete("private cancel flags");
+    }
+    t_relay();
+}
+onreply_route[MEDIA_REPLY] {
+    rtpengine_answer("private answer flags");
+}
+failure_route[MEDIA_FAILED] {
+    rtpengine_delete("private failure flags");
+}
+route[IN_DIALOG] {
+    if (has_totag()) {
+        rtpengine_manage("private manage flags");
+        rtpengine_manage("private manage flags again");
+    }
+    rtpengine_delete("private unknown cleanup flags");
+}
+CFG);
+$mediaReport = (new AtumKamailioSemantics())->present((new AtumKamailioScanner())->scan($mediaFixture . '/kamailio.cfg'));
+$mediaModel = $mediaReport['presentation']['media'];
+$mediaStages = array_column($mediaModel['stages'], null, 'key');
+$mediaJson = json_encode($mediaReport, JSON_UNESCAPED_SLASHES);
+check($mediaModel['available'] && $mediaModel['used_in_flow'], 'loaded RTPengine is distinguished from RTPengine used in the interpreted flow');
+check(array_column($mediaModel['stages'], 'key') === ['setup', 'reply', 'in-dialog', 'cleanup'] && $mediaStages['cleanup']['count'] === 4, 'media operations aggregate deterministically into lifecycle stages and one cleanup concept');
+check(array_keys($mediaStages['cleanup']['triggers']) === ['On a configured transaction failure path', 'Other media path; trigger not statically determined', 'When BYE is processed', 'When CANCEL is processed'], 'media cleanup names BYE, CANCEL and failure triggers only when structural evidence proves them');
+check($mediaStages['setup']['evidence'][0]['nat_related'] === true && $mediaStages['reply']['triggers']['During SIP reply processing'] !== [], 'NAT is associated only with the co-located media path and replies remain distinct');
+check($mediaStages['setup']['triggers']['During INVITE call setup'] !== [], 'media setup explains INVITE processing only when the condition proves it');
+check($mediaStages['in-dialog']['count'] === 2 && $mediaStages['in-dialog']['triggers']['During an existing call'] !== [], 'repeated media management aggregates by established-call context');
+check(!str_contains((string) $mediaJson, 'private offer flags') && !str_contains((string) $mediaJson, 'private unknown cleanup flags'), 'media aggregation preserves route argument redaction');
+file_put_contents($mediaFixture . '/loaded-only.cfg', "loadmodule \"rtpengine.so\"\nrequest_route { return; }\n");
+$loadedOnlyMedia = (new AtumKamailioSemantics())->present((new AtumKamailioScanner())->scan($mediaFixture . '/loaded-only.cfg'))['presentation']['media'];
+check($loadedOnlyMedia['available'] && !$loadedOnlyMedia['used_in_flow'] && $loadedOnlyMedia['stages'] === [], 'loaded-only RTPengine is not represented as active media processing');
+removeFixture($mediaFixture);
+
 if (!extension_loaded('pdo_sqlite')) { fwrite(STDERR, "FAIL  pdo_sqlite is mandatory; security tests cannot be skipped\n"); exit(1); }
 $state = sys_get_temp_dir() . '/atum-state-' . bin2hex(random_bytes(5)); mkdir($state, 0700); putenv('ATUM_STATE_DIR=' . $state); putenv('KAMAILIO_CONFIG=' . $root . '/examples/kamailio.cfg');
 require_once $root . '/admin/bootstrap.php'; $atum = Atum::create(); $atum->Modules->installBundled(true);

@@ -160,6 +160,10 @@ final class AtumKamailioSemantics
             $report['presentation']['system'],
             $report
         );
+        $report['presentation']['media'] = $this->mediaPresentation(
+            $report['presentation']['request_processing'],
+            $report['modules'] ?? []
+        );
 
         return $report;
     }
@@ -205,7 +209,7 @@ final class AtumKamailioSemantics
         $request = null;
         foreach ($flows as $flow) { if (($flow['type'] ?? '') === 'request_route') { $request = $flow; break; } }
         $allSteps = [];
-        foreach ($flows as $flow) { foreach (($flow['statements'] ?? []) as $step) { $allSteps[] = $step + ['route_type' => $flow['type'] ?? '']; } }
+        foreach ($flows as $flow) { foreach (($flow['statements'] ?? []) as $step) { $allSteps[] = $step + ['route_type' => $flow['type'] ?? '', 'route_id' => $flow['id'] ?? -1, 'route_name' => $flow['name'] ?? null]; } }
         $has = static fn(string $category): bool => (bool) array_filter($allSteps, static fn(array $step): bool => ($step['category'] ?? '') === $category);
         $requestSteps = $request['statements'] ?? [];
         $stages = [];
@@ -245,6 +249,87 @@ final class AtumKamailioSemantics
             'gaps' => array_values(array_filter($allSteps, static fn(array $step): bool => in_array($step['kind'] ?? '', ['custom', 'unresolved-route-call'], true))),
             'coverage' => $processing['coverage'] ?? [],
         ];
+    }
+
+    /** @return array<string,mixed> */
+    private function mediaPresentation(array $processing, array $modules): array
+    {
+        $mediaModule = null;
+        foreach ($modules as $module) {
+            if (in_array(strtolower((string) ($module['name'] ?? '')), ['rtpengine', 'rtpproxy'], true)
+                && ($module['source']['confidence'] ?? '') === 'syntactic') { $mediaModule = $module; break; }
+        }
+        $flows = $processing['flows'] ?? [];
+        $wired = [];
+        foreach (($processing['edges'] ?? []) as $edge) {
+            if (($edge['kind'] ?? '') === 'wiring' && isset($edge['to'])) { $wired[$edge['to']][] = $edge['kind']; }
+        }
+        $groups = ['setup' => [], 'reply' => [], 'in-dialog' => [], 'cleanup' => [], 'other' => []];
+        $natRouteIds = [];
+        foreach ($flows as $flow) {
+            foreach ($flow['statements'] as $step) {
+                if (($step['category'] ?? '') === 'nat') { $natRouteIds[$flow['id']] = true; }
+            }
+        }
+        foreach ($flows as $flow) {
+            foreach ($flow['statements'] as $step) {
+                if (($step['category'] ?? '') !== 'media') { continue; }
+                $step += ['route_id' => $flow['id'], 'route_type' => $flow['type'], 'route_name' => $flow['name']];
+                $function = (string) ($step['function'] ?? '');
+                $group = match ($function) {
+                    'rtpengine_offer', 'rtpproxy_offer' => 'setup',
+                    'rtpengine_answer', 'rtpproxy_answer' => 'reply',
+                    'rtpengine_delete' => 'cleanup',
+                    default => ($flow['type'] === 'onreply_route' ? 'reply' : ($this->hasCondition($step, 'If the request is in-dialog') ? 'in-dialog' : 'other')),
+                };
+                $step['trigger'] = $this->mediaTrigger($step, $flow, $wired);
+                $step['nat_related'] = isset($natRouteIds[$flow['id']]);
+                $groups[$group][] = $step;
+            }
+        }
+        $stages = [];
+        foreach ([
+            'setup' => ['Call setup', 'Media negotiation is prepared for new calls.'],
+            'reply' => ['Reply media processing', 'Media information is processed for SIP replies.'],
+            'in-dialog' => ['Established-call media processing', 'Media is processed for requests within an existing call.'],
+            'cleanup' => ['Media session cleanup', 'Media sessions are explicitly removed from recognised processing paths.'],
+            'other' => ['Other media processing', 'Media processing was found outside a recognised lifecycle context.'],
+        ] as $key => [$title, $summary]) {
+            if ($groups[$key] === []) { continue; }
+            $triggers = [];
+            foreach ($groups[$key] as $step) { $triggers[$step['trigger']][] = $step; }
+            ksort($triggers, SORT_NATURAL | SORT_FLAG_CASE);
+            $stages[] = ['key' => $key, 'title' => $title, 'summary' => $summary, 'count' => count($groups[$key]), 'triggers' => $triggers, 'evidence' => $groups[$key]];
+        }
+        return [
+            'available' => $mediaModule !== null,
+            'module' => $mediaModule,
+            'used_in_flow' => $groups !== array_fill_keys(array_keys($groups), []),
+            'stages' => $stages,
+            'nat_related_count' => count(array_filter(array_merge(...array_values($groups)), static fn(array $step): bool => $step['nat_related'])),
+            'custom_paths' => count(array_filter(array_merge(...array_values($groups)), static fn(array $step): bool => ($step['confidence'] ?? '') !== 'syntactic')),
+        ];
+    }
+
+    private function hasCondition(array $step, string $condition): bool
+    {
+        return in_array($condition, $step['conditions'] ?? [], true);
+    }
+
+    private function mediaTrigger(array $step, array $flow, array $wired): string
+    {
+        foreach ($step['conditions'] ?? [] as $condition) {
+            if (($step['function'] ?? '') === 'rtpengine_offer' && $condition === 'If request method is INVITE') {
+                return 'During INVITE call setup';
+            }
+            if (preg_match('/^If request method is (BYE|CANCEL)$/', $condition, $match)) {
+                return 'When ' . $match[1] . ' is processed';
+            }
+        }
+        if ($flow['type'] === 'onreply_route') { return 'During SIP reply processing'; }
+        if ($flow['type'] === 'failure_route' && isset($wired[$flow['id']])) { return 'On a configured transaction failure path'; }
+        if ($this->hasCondition($step, 'If the request is in-dialog')) { return 'During an existing call'; }
+        return 'Other media path; trigger not statically determined';
     }
 
     /** @return array{title:string,kind:string} */
@@ -293,7 +378,7 @@ final class AtumKamailioSemantics
         }
         if ($statement['kind'] === 'function-call') {
             $function = $statement['function'];
-            if (isset(self::ROUTE_ACTIONS[$function])) { return $base + ['kind' => 'action', 'meaning' => self::ROUTE_ACTIONS[$function]['meaning'], 'category' => self::ROUTE_ACTIONS[$function]['category'], 'terminal' => self::ROUTE_ACTIONS[$function]['terminal'] ?? false]; }
+            if (isset(self::ROUTE_ACTIONS[$function])) { return $base + ['kind' => 'action', 'function' => $function, 'meaning' => self::ROUTE_ACTIONS[$function]['meaning'], 'category' => self::ROUTE_ACTIONS[$function]['category'], 'terminal' => self::ROUTE_ACTIONS[$function]['terminal'] ?? false]; }
             $wiring = ['t_on_reply' => ['onreply_route', 'Reply processing is assigned to onreply_route'], 't_on_failure' => ['failure_route', 'Failure processing is assigned to failure_route'], 't_on_branch' => ['branch_route', 'Branch processing is assigned to branch_route']];
             if (isset($wiring[$function]) && isset($statement['target'])) {
                 [$type, $meaning] = $wiring[$function];
