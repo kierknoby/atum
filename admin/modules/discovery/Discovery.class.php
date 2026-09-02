@@ -6,6 +6,16 @@ require_once __DIR__ . '/../../libraries/Atum/Kamailio/Semantics.class.php';
 
 class Discovery extends AtumModule
 {
+    private const VIEWS = [
+        'overview' => 'Overview',
+        'call-flow' => 'Call Flow',
+        'connectivity' => 'Connectivity',
+        'routing' => 'Routing',
+        'media' => 'Media',
+        'access' => 'Access & Registration',
+        'evidence' => 'Configuration & Evidence',
+    ];
+
     public function scan(?string $config = null): array
     {
         $config ??= (string) $this->Atum->Config->get('KAMAILIO_CONFIG');
@@ -13,8 +23,9 @@ class Discovery extends AtumModule
         return (new AtumKamailioSemantics())->present($report);
     }
 
-    public function showPage(): string
+    public function showPage(?string $view = null): string
     {
+        $view = isset(self::VIEWS[$view ?? '']) ? $view : 'overview';
         try {
             $report = $this->scan();
             $error = null;
@@ -32,6 +43,8 @@ class Discovery extends AtumModule
             'report' => $report,
             'error' => $error,
             'configPath' => (string) $this->Atum->Config->get('KAMAILIO_CONFIG'),
+            'view' => $view,
+            'views' => self::VIEWS,
         ]);
     }
 

@@ -101,7 +101,7 @@ final class AtumModules
         return $this->instances[$rawname] = $instance;
     }
 
-    public function getMenu(): array
+    public function getMenu(string $display = '', string $view = ''): array
     {
         $menu = [];
         foreach ($this->getActiveModules() as $module) {
@@ -110,7 +110,11 @@ final class AtumModules
                     continue;
                 }
                 $category = $item['category'] !== '' ? $item['category'] : 'Applications';
-                $menu[$category][] = array_merge($item, ['module' => $module['rawname']]);
+                $children = $item['children'] ?? [];
+                $childIds = array_column($children, 'id');
+                $activeChild = $item['id'] === $display && in_array($view, $childIds, true)
+                    ? $view : ($item['id'] === $display && $children !== [] ? $children[0]['id'] : '');
+                $menu[$category][] = array_merge($item, ['module' => $module['rawname'], 'active' => $item['id'] === $display, 'active_child' => $activeChild]);
             }
         }
         ksort($menu);

@@ -45,6 +45,10 @@ $display = isset($_GET['display']) ? strtolower((string) $_GET['display']) : 'da
 if (!preg_match('/^[a-z0-9_-]+$/', $display)) {
     $display = 'dashboard';
 }
+$navigationView = isset($_GET['view']) ? strtolower((string) $_GET['view']) : '';
+if (!preg_match('/^[a-z0-9_-]*$/', $navigationView)) {
+    $navigationView = '';
+}
 
 $page = $Atum->Modules->pageFile($display);
 if ($page === null) {
@@ -73,7 +77,7 @@ if ($page === null) {
 echo $Atum->View->load(dirname(__DIR__) . '/admin/views/layout.php', [
     'content' => $content,
     'display' => $display,
-    'menu' => $Atum->Modules->getMenu(),
+    'menu' => $Atum->Modules->getMenu($display, $navigationView),
     'readOnly' => (bool) $Atum->Config->get('ATUM_READ_ONLY', true),
     'user' => $Atum->Auth->user(),
     'csrf' => $Atum->Auth->csrfToken(),

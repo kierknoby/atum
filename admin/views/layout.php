@@ -30,9 +30,16 @@ $e = [AtumView::class, 'escape'];
     <?php foreach ($menu as $category => $items): ?>
       <div class="menu-category"><?= $e($category) ?></div>
       <?php foreach ($items as $item): ?>
-        <a class="menu-item <?= $display === $item['id'] ? 'active' : '' ?>" href="index.php?display=<?= urlencode($item['id']) ?>">
+        <a class="menu-item <?= ($item['active'] ?? ($display === $item['id'])) ? 'active' : '' ?>" href="index.php?display=<?= urlencode($item['id']) ?>">
           <?= $e($item['name']) ?>
         </a>
+        <?php if (($item['children'] ?? []) !== []): ?>
+          <div class="menu-children">
+            <?php foreach ($item['children'] as $child): ?>
+              <a class="menu-child <?= ($item['active_child'] ?? '') === $child['id'] ? 'active' : '' ?>" href="index.php?display=<?= urlencode($item['id']) ?>&amp;view=<?= urlencode($child['id']) ?>"><?= $e($child['name']) ?></a>
+            <?php endforeach; ?>
+          </div>
+        <?php endif; ?>
       <?php endforeach; ?>
     <?php endforeach; ?>
   </aside>

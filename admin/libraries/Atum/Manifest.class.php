@@ -52,6 +52,7 @@ final class AtumManifest
                     'category' => self::tag($itemXml, 'category', $manifest['category']),
                     'sort' => (int) self::tag($itemXml, 'sort', '100'),
                     'permission' => self::tag($itemXml, 'permission', $manifest['permission']),
+                    'children' => self::menuChildren($itemXml),
                 ];
             }
         }
@@ -88,6 +89,11 @@ final class AtumManifest
             if ($item['id'] !== '' && !preg_match('/^[a-z0-9_-]+$/', $item['id'])) {
                 throw new RuntimeException('Module manifest has an invalid menu item id: ' . $file);
             }
+            foreach ($item['children'] as $child) {
+                if (!preg_match('/^[a-z0-9_-]+$/', $child['id'])) {
+                    throw new RuntimeException('Module manifest has an invalid menu child id: ' . $file);
+                }
+            }
         }
         foreach (['rawname', 'name', 'version'] as $required) {
             if ($manifest[$required] === '') {
@@ -105,6 +111,19 @@ final class AtumManifest
         }
 
         return trim(html_entity_decode(strip_tags($match[1]), ENT_QUOTES | ENT_XML1, 'UTF-8'));
+    }
+
+    /** @return list<array{id:string,name:string}> */
+    private static function menuChildren(string $itemXml): array
+    {
+        if (!preg_match('/<children>(.*?)<\/children>/si', $itemXml, $block)) {
+            return [];
+        }
+        preg_match_all('/<child>(.*?)<\/child>/si', $block[1], $children);
+        return array_map(static fn(string $child): array => [
+            'id' => self::tag($child, 'id'),
+            'name' => self::tag($child, 'name'),
+        ], $children[1] ?? []);
     }
 
     private static function validateStructure(string $xml, string $file): void

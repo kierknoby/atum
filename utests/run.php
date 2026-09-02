@@ -9,6 +9,7 @@ function removeFixture(string $path): void { if (!is_dir($path)) { return; } $it
 
 require_once $root . '/admin/libraries/Atum/Kamailio/Scanner.class.php';
 require_once $root . '/admin/libraries/Atum/Kamailio/Semantics.class.php';
+require_once $root . '/admin/libraries/Atum/Manifest.class.php';
 $fixture = sys_get_temp_dir() . '/atum-scanner-' . bin2hex(random_bytes(5)); mkdir($fixture, 0700);
 file_put_contents($fixture . '/included.cfg', "loadmodule 'dispatcher.so'\nroute[FROM_INCLUDE] { return; }\n");
 file_put_contents($fixture . '/root.cfg', <<<'CFG'
@@ -61,6 +62,10 @@ $rawSl = $report['modules'][array_search('sl', array_column($report['modules'], 
 check($presentedModules['sl']['source'] === $rawSl['source'] && $presentedModules['sl']['params'][0]['source'] === $rawSl['params'][0]['source'], 'module and parameter provenance survive semantic presentation');
 check(count($presentedModules['sl']['params']) === 3 && $presentedModules['tm']['params'] === [], 'modules with and without discovered parameters are preserved');
 check(AtumKamailioSemantics::recognisedModuleNames() === array_values(array_unique(AtumKamailioSemantics::recognisedModuleNames())), 'recognised module catalogue is deterministic and unique');
+$discoveryManifest = AtumManifest::parse($root . '/admin/modules/discovery/module.xml');
+check(array_column($discoveryManifest['menuitems'][0]['children'], 'id') === ['overview', 'call-flow', 'connectivity', 'routing', 'media', 'access', 'evidence'], 'manifest supports deterministic reusable child navigation entries');
+$dashboardManifest = AtumManifest::parse($root . '/admin/modules/dashboard/module.xml');
+check($dashboardManifest['menuitems'][0]['children'] === [], 'flat menu manifests remain backward compatible');
 removeFixture($fixture);
 
 $interpretationFixture = sys_get_temp_dir() . '/atum-interpretation-' . bin2hex(random_bytes(5)); mkdir($interpretationFixture, 0700);
@@ -117,6 +122,7 @@ $routeJson = json_encode($routeReport, JSON_UNESCAPED_SLASHES);
 $presentedRouteReport = (new AtumKamailioSemantics())->present($routeReport);
 $interpretation = $presentedRouteReport['presentation']['system'];
 $requestProcessing = $presentedRouteReport['presentation']['request_processing'];
+$operator = $presentedRouteReport['presentation']['operator'];
 $interpretationFindings = array_column($interpretation['findings'], 'explanation');
 check(in_array('SIP over UDP listening on 198.51.100.10:5060 (non-loopback address).', $interpretationFindings, true), 'listener interpretation identifies SIP transport and non-loopback binding without claiming public reachability');
 check(in_array('RTPengine media handling appears to be configured.', $interpretationFindings, true), 'module plus matching reply route produces stronger configured evidence');
@@ -135,6 +141,11 @@ check($policyFlow['statements'][0]['meaning'] === 'If request method is INVITE' 
 check(count($requestProcessing['edges']) === 7 && $requestProcessing['coverage']['unresolved'] === 1 && $requestProcessing['coverage']['custom'] >= 1, 'graph records static route and reply/failure/branch edges while retaining unresolved/custom nodes');
 check($requestProcessing['coverage']['cycles'] !== [] && array_column($requestProcessing['coverage']['unreferenced'], 'name') === ['ORPHAN'], 'graph detects recursive calls and reports only no-static-reference routes');
 check(!str_contains((string) $routeJson, 'secret media flags') && !str_contains((string) $routeJson, 'secret-material'), 'route action arguments and custom statements remain redacted');
+check(in_array('Selects an upstream or backend destination from dispatcher data.', $operator['overview'], true) && in_array('Uses media-relay processing in the interpreted call path.', $operator['overview'], true), 'operator overview synthesises server roles without requiring Kamailio terminology');
+check(array_column($operator['stages'], 'title') === ['Keep this proxy in the call signalling path', 'Prepare dedicated reply, failure, or branch handling', 'Apply routing policy', 'Custom logic', 'Forward SIP request'], 'operator flow compresses sequential request operations into readable stages');
+check($operator['stages'][2]['evidence'][0]['meaning'] === 'Call route[POLICY]' && $operator['stages'][4]['evidence'][0]['meaning'] === 'Relay request statefully', 'operator stages retain technical evidence beneath primary labels');
+check(array_column($operator['media'], 'meaning') === ['Apply RTPengine answer processing', 'Apply RTPengine offer processing'] && array_column($operator['access'], 'meaning') === [], 'operator media distinguishes interpreted request/reply processing from absent access handling');
+check(in_array('Dynamic route call', array_column($operator['gaps'], 'meaning'), true) && in_array('Custom or uninterpreted statement', array_column($operator['gaps'], 'meaning'), true), 'operator model keeps custom and unresolved flow steps visible');
 removeFixture($interpretationFixture);
 
 $conditionFixture = sys_get_temp_dir() . '/atum-conditions-' . bin2hex(random_bytes(5)); mkdir($conditionFixture, 0700);

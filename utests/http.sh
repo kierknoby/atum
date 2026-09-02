@@ -27,19 +27,31 @@ curl -fsS -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/index.php" > "$TEST_DIR
 auth_csrf=$(sed -n 's/.*name="csrf" value="\([^"]*\)".*/\1/p' "$TEST_DIR/page" | head -n1)
 [ -n "$auth_csrf" ]
 curl -fsS -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/index.php?display=discovery" > "$TEST_DIR/discovery-page"
-grep -q 'How requests are handled' "$TEST_DIR/discovery-page"
-grep -q 'Call route\[DISPATCH\]' "$TEST_DIR/discovery-page"
-grep -q 'named route had no static reference found' "$TEST_DIR/discovery-page"
-grep -q 'System interpretation' "$TEST_DIR/discovery-page"
-grep -q 'Discovery confidence' "$TEST_DIR/discovery-page"
-grep -q 'SIP over UDP listening on 0.0.0.0:5060' "$TEST_DIR/discovery-page"
-grep -q 'Configuration composition' "$TEST_DIR/discovery-page"
-grep -q 'Custom routing logic detected' "$TEST_DIR/discovery-page"
-grep -q 'Detected module support' "$TEST_DIR/discovery-page"
-grep -q 'Dispatching and load balancing' "$TEST_DIR/discovery-page"
-grep -q 'Destination selection and load balancing' "$TEST_DIR/discovery-page"
-grep -q 'discovered parameter.*provenance' "$TEST_DIR/discovery-page"
-grep -q '&quot;&lt;redacted-dsn&gt;&quot;' "$TEST_DIR/discovery-page"
+grep -q 'class="menu-item active"' "$TEST_DIR/discovery-page"
+grep -q '>Discovery' "$TEST_DIR/discovery-page"
+grep -q 'class="menu-child active"[^>]*>Overview' "$TEST_DIR/discovery-page"
+grep -q 'display=discovery&amp;view=media' "$TEST_DIR/discovery-page"
+grep -q 'display=moduleadmin' "$TEST_DIR/discovery-page"
+grep -q 'What this server does' "$TEST_DIR/discovery-page"
+grep -q 'Incoming request path' "$TEST_DIR/discovery-page"
+grep -q 'Apply routing policy' "$TEST_DIR/discovery-page"
+! grep -q 'ds_select_dst' "$TEST_DIR/discovery-page"
+curl -fsS -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/index.php?display=discovery&view=call-flow" > "$TEST_DIR/call-flow-page"
+grep -q 'class="menu-child active"[^>]*>Call Flow' "$TEST_DIR/call-flow-page"
+grep -q 'Call flow' "$TEST_DIR/call-flow-page"
+grep -q 'Technical details' "$TEST_DIR/call-flow-page"
+grep -q 'Call route\[DISPATCH\]' "$TEST_DIR/call-flow-page"
+curl -fsS -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/index.php?display=discovery&view=evidence" > "$TEST_DIR/discovery-evidence-page"
+grep -q 'How requests are handled' "$TEST_DIR/discovery-evidence-page"
+grep -q 'System interpretation' "$TEST_DIR/discovery-evidence-page"
+grep -q 'Configuration composition' "$TEST_DIR/discovery-evidence-page"
+grep -q 'Detected module support' "$TEST_DIR/discovery-evidence-page"
+grep -q 'Dispatching and load balancing' "$TEST_DIR/discovery-evidence-page"
+grep -q 'Destination selection and load balancing' "$TEST_DIR/discovery-evidence-page"
+grep -q 'discovered parameter.*provenance' "$TEST_DIR/discovery-evidence-page"
+grep -q '&quot;&lt;redacted-dsn&gt;&quot;' "$TEST_DIR/discovery-evidence-page"
+curl -fsS -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/index.php?display=discovery&view=not-valid" > "$TEST_DIR/invalid-discovery-view"
+grep -q 'What this server does' "$TEST_DIR/invalid-discovery-view"
 ! grep -q 'supersecret' "$TEST_DIR/discovery-page"
 [ "$(curl -sS -o /dev/null -w '%{http_code}' -b "$TEST_DIR/cookies" -X POST "http://127.0.0.1:$PORT/ajax.php?module=userman&command=disable")" = 403 ]
 [ "$(curl -sS -o /dev/null -w '%{http_code}' -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/ajax.php?module=userman&command=disable")" = 405 ]
@@ -57,6 +69,7 @@ curl -fsS -c "$TEST_DIR/cookies" -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/
 grep -q 'Sign in' "$TEST_DIR/revalidated"
 csrf=$(sed -n 's/.*name="csrf" value="\([^"]*\)".*/\1/p' "$TEST_DIR/revalidated" | head -n1)
 curl -sS -c "$TEST_DIR/cookies" -b "$TEST_DIR/cookies" -d "login=1&csrf=$csrf&username=httplimited&password=HTTP%20limited%20password%20123" -o /dev/null "http://127.0.0.1:$PORT/index.php"
+[ "$(curl -sS -o /dev/null -w '%{http_code}' -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/index.php?display=discovery&view=media")" = 200 ]
 [ "$(curl -sS -o /dev/null -w '%{http_code}' -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/index.php?display=moduleadmin")" = 404 ]
 [ "$(curl -sS -o /dev/null -w '%{http_code}' -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/ajax.php?module=userman&command=delete")" = 403 ]
 

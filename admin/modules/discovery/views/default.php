@@ -5,6 +5,7 @@ $e = [AtumView::class, 'escape'];
 $modulePresentation = $report['presentation']['modules'] ?? ['capabilities' => [], 'coverage' => ['total' => 0, 'recognised' => 0, 'unclassified' => 0], 'groups' => []];
 $system = $report['presentation']['system'] ?? ['findings' => [], 'listeners' => [], 'routes' => ['groups' => [], 'custom_by_component' => []], 'composition' => [], 'confidence' => ['level' => 'partial', 'scope' => 'unknown', 'reasons' => [], 'gaps' => [], 'unclassified_modules' => 0, 'unknown_statements' => 0, 'warnings' => 0]];
 $requestProcessing = $report['presentation']['request_processing'] ?? ['flows' => [], 'coverage' => ['recognised' => 0, 'custom' => 0, 'unresolved' => 0, 'cycles' => [], 'unreferenced' => []]];
+$operator = $report['presentation']['operator'] ?? ['overview' => [], 'stages' => [], 'connectivity' => [], 'routing' => [], 'media' => [], 'access' => [], 'gaps' => [], 'coverage' => []];
 ?>
 <div class="page-heading">
   <div>
@@ -31,6 +32,31 @@ $requestProcessing = $report['presentation']['request_processing'] ?? ['flows' =
       <div class="stat"><span>Discovery confidence</span><strong><?= $e(ucfirst((string) $system['confidence']['level'])) ?></strong></div>
     </div>
 
+    <?php if ($view === 'overview'): ?>
+      <section class="operator-hero">
+        <h2>What this server does</h2>
+        <?php foreach ($operator['overview'] as $summary): ?><p><?= $e($summary) ?></p><?php endforeach; ?>
+        <div class="operator-confidence"><strong>Understanding: <?= $e(ucfirst((string) $system['confidence']['level'])) ?></strong><span><?= (int) $requestProcessing['coverage']['custom'] ?> custom processing steps · <?= (int) $modulePresentation['coverage']['unclassified'] ?> unclassified modules · <?= (int) $requestProcessing['coverage']['unresolved'] ?> unresolved destinations</span></div>
+      </section>
+      <section class="panel"><div class="panel-heading"><h2>Incoming request path</h2></div><div class="panel-body compact-stage-list">
+        <?php foreach ($operator['stages'] as $stage): ?><article class="operator-stage operator-stage-<?= $e($stage['kind']) ?>"><strong><?= $e($stage['title']) ?></strong><?php if ($stage['conditions'] !== []): ?><span><?= $e(implode(' / ', $stage['conditions'])) ?></span><?php endif; ?></article><?php endforeach; ?>
+      </div></section>
+    <?php elseif ($view === 'call-flow'): ?>
+      <section class="panel"><div class="panel-heading"><h2>Call flow</h2></div><div class="panel-body visual-flow">
+        <?php foreach ($operator['stages'] as $stage): ?><article class="operator-stage operator-stage-<?= $e($stage['kind']) ?>"><strong><?= $e($stage['title']) ?></strong><?php if ($stage['conditions'] !== []): ?><span><?= $e(implode(' / ', $stage['conditions'])) ?></span><?php endif; ?><details><summary>Technical details</summary><ul><?php foreach ($stage['evidence'] as $evidence): ?><li><?= $e($evidence['meaning']) ?> <code><?= $e($evidence['source']['file']) ?>:<?= (int) $evidence['source']['line'] ?></code></li><?php endforeach; ?></ul></details></article><?php endforeach; ?>
+        <?php if ($operator['gaps'] !== []): ?><article class="operator-stage operator-stage-custom"><strong>Custom logic</strong><span>Atum cannot yet interpret <?= count($operator['gaps']) ?> processing step<?= count($operator['gaps']) === 1 ? '' : 's' ?>.</span></article><?php endif; ?>
+      </div></section>
+    <?php elseif ($view === 'connectivity'): ?>
+      <section class="panel"><div class="panel-heading"><h2>Where SIP traffic enters</h2></div><div class="panel-body operator-list"><?php foreach ($operator['connectivity'] as $listener): ?><article><strong><?= $e($listener['label']) ?></strong><p><?= $e($listener['description']) ?></p><details><summary>Technical details</summary><code><?= $e($listener['source']['file']) ?>:<?= (int) $listener['source']['line'] ?></code></details></article><?php endforeach; ?></div></section>
+    <?php elseif ($view === 'routing'): ?>
+      <section class="panel"><div class="panel-heading"><h2>Routing and destinations</h2></div><div class="panel-body operator-list"><?php if ($operator['routing'] === []): ?><p class="muted-copy">No recognised routing or destination-selection steps were identified.</p><?php endif; ?><?php foreach ($operator['routing'] as $step): ?><article><strong><?= $e($step['meaning']) ?></strong><p><?= ($step['category'] ?? '') === 'dispatching' ? 'Destination data is external to the interpreted configuration.' : 'This step is part of the statically interpreted routing path.' ?></p><details><summary>Technical details</summary><code><?= $e($step['source']['file']) ?>:<?= (int) $step['source']['line'] ?></code></details></article><?php endforeach; ?></div></section>
+    <?php elseif ($view === 'media'): ?>
+      <section class="panel"><div class="panel-heading"><h2>Media and NAT handling</h2></div><div class="panel-body operator-list"><?php if ($operator['media'] === []): ?><p class="muted-copy">No recognised media processing was identified in the interpreted route flow. Loaded media support alone does not prove use.</p><?php endif; ?><?php foreach ($operator['media'] as $step): ?><article><strong><?= $e($step['meaning']) ?></strong><p><?= $e($step['route_type'] === 'onreply_route' ? 'This applies to SIP replies.' : 'This appears in request processing.') ?></p><details><summary>Technical details</summary><code><?= $e($step['source']['file']) ?>:<?= (int) $step['source']['line'] ?></code></details></article><?php endforeach; ?></div></section>
+    <?php elseif ($view === 'access'): ?>
+      <section class="panel"><div class="panel-heading"><h2>Access and endpoint registration</h2></div><div class="panel-body operator-list"><?php if ($operator['access'] === []): ?><p class="muted-copy">No recognised local endpoint-registration or subscriber-authentication handling was identified in the interpreted configuration. Discovery is partial.</p><?php endif; ?><?php foreach ($operator['access'] as $step): ?><article><strong><?= $e($step['meaning']) ?></strong><details><summary>Technical details</summary><code><?= $e($step['source']['file']) ?>:<?= (int) $step['source']['line'] ?></code></details></article><?php endforeach; ?></div></section>
+    <?php endif; ?>
+
+    <?php if ($view === 'evidence'): ?>
     <section class="panel request-processing">
       <div class="panel-heading"><h2>How requests are handled</h2></div>
       <div class="panel-body">
@@ -233,6 +259,8 @@ $requestProcessing = $report['presentation']['request_processing'] ?? ['flows' =
         <?php endforeach; ?>
       </div>
     </section>
+
+    <?php endif; ?>
 
   </div>
 <?php endif; ?>

@@ -19,6 +19,15 @@
       <name>Discovery</name>
       <category>Kamailio</category>
       <sort>10</sort><permission>discovery.view</permission>
+      <children>
+        <child><id>overview</id><name>Overview</name></child>
+        <child><id>call-flow</id><name>Call Flow</name></child>
+        <child><id>connectivity</id><name>Connectivity</name></child>
+        <child><id>routing</id><name>Routing</name></child>
+        <child><id>media</id><name>Media</name></child>
+        <child><id>access</id><name>Access &amp; Registration</name></child>
+        <child><id>evidence</id><name>Configuration &amp; Evidence</name></child>
+      </children>
     </item>
   </menuitems>
 </module>

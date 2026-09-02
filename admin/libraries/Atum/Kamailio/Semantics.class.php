@@ -155,6 +155,11 @@ final class AtumKamailioSemantics
         ];
         $report['presentation']['system'] = $this->systemPresentation($report, $recognised, $total - $recognised);
         $report['presentation']['request_processing'] = $this->requestProcessing($report);
+        $report['presentation']['operator'] = $this->operatorPresentation(
+            $report['presentation']['request_processing'],
+            $report['presentation']['system'],
+            $report
+        );
 
         return $report;
     }
@@ -191,6 +196,84 @@ final class AtumKamailioSemantics
             if ($flow['type'] === 'route' && !in_array($flow['id'], $referenced, true)) { $unreferenced[] = $flow; }
         }
         return ['flows' => $flows, 'edges' => $edges, 'coverage' => ['recognised' => $recognised, 'custom' => $custom, 'unresolved' => $unresolved, 'cycles' => $cycles, 'unreferenced' => $unreferenced]];
+    }
+
+    /** @return array<string,mixed> */
+    private function operatorPresentation(array $processing, array $system, array $report): array
+    {
+        $flows = $processing['flows'] ?? [];
+        $request = null;
+        foreach ($flows as $flow) { if (($flow['type'] ?? '') === 'request_route') { $request = $flow; break; } }
+        $allSteps = [];
+        foreach ($flows as $flow) { foreach (($flow['statements'] ?? []) as $step) { $allSteps[] = $step + ['route_type' => $flow['type'] ?? '']; } }
+        $has = static fn(string $category): bool => (bool) array_filter($allSteps, static fn(array $step): bool => ($step['category'] ?? '') === $category);
+        $requestSteps = $request['statements'] ?? [];
+        $stages = [];
+        foreach ($requestSteps as $step) {
+            $stage = match ($step['kind']) {
+                'condition' => ['title' => $this->operatorCondition($step['meaning']), 'kind' => 'branch'],
+                'route-call' => ['title' => 'Apply routing policy', 'kind' => 'routing'],
+                'wiring' => ['title' => 'Prepare dedicated reply, failure, or branch handling', 'kind' => 'wiring'],
+                'unresolved-route-call', 'custom' => ['title' => 'Custom logic', 'kind' => 'custom'],
+                default => $this->operatorAction($step),
+            };
+            $stage['evidence'] = [$step];
+            $stage['conditions'] = $step['conditions'] ?? [];
+            $last = array_key_last($stages);
+            if ($last !== null && $stages[$last]['title'] === $stage['title'] && $stages[$last]['conditions'] === $stage['conditions']) {
+                $stages[$last]['evidence'][] = $step;
+            } else { $stages[] = $stage; }
+        }
+        $roles = [];
+        if (($system['listeners'] ?? []) !== []) { $roles[] = 'Accepts SIP signalling.'; }
+        if ($request !== null && array_filter($requestSteps, static fn(array $step): bool => ($step['terminal'] ?? false) === true)) { $roles[] = 'Processes incoming requests and forwards or terminates them according to routing policy.'; }
+        if ($has('dispatching')) { $roles[] = 'Selects an upstream or backend destination from dispatcher data.'; }
+        if ($has('media')) { $roles[] = 'Uses media-relay processing in the interpreted call path.'; }
+        if ($has('registration')) { $roles[] = 'Contains local endpoint registration or location handling.'; }
+        if ($has('authentication')) { $roles[] = 'Contains subscriber authentication handling.'; }
+        if ($roles === []) { $roles[] = 'Atum could not derive a broad operator role from the interpreted configuration.'; }
+        $media = array_values(array_filter($allSteps, static fn(array $step): bool => ($step['category'] ?? '') === 'media'));
+        $access = array_values(array_filter($allSteps, static fn(array $step): bool => in_array(($step['category'] ?? ''), ['registration', 'authentication'], true)));
+        $routing = array_values(array_filter($allSteps, static fn(array $step): bool => in_array(($step['category'] ?? ''), ['routing', 'dispatching', 'transaction'], true) || ($step['kind'] ?? '') === 'route-call'));
+        return [
+            'overview' => $roles,
+            'stages' => $stages,
+            'connectivity' => $system['listeners'] ?? [],
+            'routing' => $routing,
+            'media' => $media,
+            'access' => $access,
+            'gaps' => array_values(array_filter($allSteps, static fn(array $step): bool => in_array($step['kind'] ?? '', ['custom', 'unresolved-route-call'], true))),
+            'coverage' => $processing['coverage'] ?? [],
+        ];
+    }
+
+    /** @return array{title:string,kind:string} */
+    private function operatorAction(array $step): array
+    {
+        return match ($step['category'] ?? '') {
+            'routing' => ['title' => 'Keep this proxy in the call signalling path', 'kind' => 'routing'],
+            'dispatching' => ['title' => 'Select backend destination', 'kind' => 'routing'],
+            'media' => ['title' => 'Process call media', 'kind' => 'media'],
+            'nat' => ['title' => 'Handle NAT traversal', 'kind' => 'access'],
+            'registration' => ['title' => 'Handle endpoint registration or location', 'kind' => 'access'],
+            'authentication' => ['title' => 'Authenticate endpoint', 'kind' => 'access'],
+            'reply' => ['title' => 'Send local SIP response', 'kind' => 'outcome'],
+            'transaction' => ['title' => ($step['terminal'] ?? false) ? 'Forward SIP request' : 'Manage SIP transaction', 'kind' => 'outcome'],
+            default => match ($step['meaning'] ?? '') {
+                'Drop request' => ['title' => 'Drop request', 'kind' => 'outcome'],
+                'Stop route processing' => ['title' => 'Stop processing', 'kind' => 'outcome'],
+                'Return to calling route' => ['title' => 'Return to previous routing stage', 'kind' => 'outcome'],
+                default => ['title' => 'Custom logic', 'kind' => 'custom'],
+            },
+        };
+    }
+
+    private function operatorCondition(string $meaning): string
+    {
+        return match ($meaning) {
+            'If the request is in-dialog' => 'Requests within an existing dialog',
+            default => str_starts_with($meaning, 'If request method is ') ? substr($meaning, 3) . ' requests' : str_replace('If ', 'Requests ', $meaning),
+        };
     }
 
     /** @return array<string,mixed> */
