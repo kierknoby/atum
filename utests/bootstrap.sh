@@ -45,7 +45,11 @@ EOF
 #!/bin/sh
 printf 'invoked\n' >> "$ATUM_BOOTSTRAP_TEST_ROOT/installer.count"
 printf '%s\n' "$@" > "$ATUM_BOOTSTRAP_TEST_ROOT/installer.args"
+umask > "$ATUM_BOOTSTRAP_TEST_ROOT/installer.umask"
+source_dir=${0%/*}
+/usr/bin/stat -c %a "${source_dir%/*}" > "$ATUM_BOOTSTRAP_TEST_ROOT/checkout.mode"
 if [ -f "$ATUM_BOOTSTRAP_TEST_ROOT/installer.wait" ]; then
+    trap '/bin/rm -f "$ATUM_BOOTSTRAP_TEST_ROOT/installer.live"; exit 129' HUP
     trap '/bin/rm -f "$ATUM_BOOTSTRAP_TEST_ROOT/installer.live"; exit 130' INT
     trap '/bin/rm -f "$ATUM_BOOTSTRAP_TEST_ROOT/installer.live"; exit 143' TERM
     printf '%s\n' "$$" > "$ATUM_BOOTSTRAP_TEST_ROOT/installer.ready"
@@ -160,6 +164,10 @@ assert_no_checkout() {
     [ ! -e "${clone_path%/source}" ]
 }
 
+assert_private_checkout() {
+    [ "$(cat "$CASE_ROOT/checkout.mode")" = 700 ]
+}
+
 assert_not_invoked() {
     [ ! -e "$CASE_ROOT/installer.count" ]
 }
@@ -200,6 +208,7 @@ done
 # stdin caller arguments, and spaces/metacharacters remain single arguments.
 new_case existing-git
 enable_git
+expected_installer_umask=$(umask)
 run_bootstrap_stdin --yes --verbose '--prefix=/tmp/Atum source; literal' '--listen-address=2001:db8::1'
 [ "$BOOTSTRAP_STATUS" -eq 0 ]
 grep -qx 'Atum source: https://github.com/kierknoby/atum.git' "$CASE_ROOT/stdout"
@@ -215,6 +224,38 @@ cat > "$CASE_ROOT/installer.args.expected" <<'EOF'
 --listen-address=2001:db8::1
 EOF
 cmp -s "$CASE_ROOT/installer.args.expected" "$CASE_ROOT/installer.args"
+[ "$(cat "$CASE_ROOT/installer.umask")" = "$expected_installer_umask" ]
+assert_private_checkout
+assert_no_checkout
+assert_firewall_unchanged
+
+# Bootstrap's checkout policy stays private, while the installer sees exactly
+# the caller's original umask rather than an unconditional leaked 077.
+new_case restored-umask
+enable_git
+original_test_umask=$(umask)
+umask 027
+expected_installer_umask=$(umask)
+run_bootstrap --yes
+umask "$original_test_umask"
+[ "$BOOTSTRAP_STATUS" -eq 0 ]
+[ "$(cat "$CASE_ROOT/installer.umask")" = "$expected_installer_umask" ]
+assert_private_checkout
+assert_no_checkout
+assert_firewall_unchanged
+
+# If the caller itself selected 077, restoring that value is still correct; the
+# installer must independently establish every deployment-critical mode.
+new_case restrictive-caller-umask
+enable_git
+original_test_umask=$(umask)
+umask 077
+expected_installer_umask=$(umask)
+run_bootstrap --yes
+umask "$original_test_umask"
+[ "$BOOTSTRAP_STATUS" -eq 0 ]
+[ "$(cat "$CASE_ROOT/installer.umask")" = "$expected_installer_umask" ]
+assert_private_checkout
 assert_no_checkout
 assert_firewall_unchanged
 
@@ -282,20 +323,24 @@ run_bootstrap --yes
 assert_no_checkout
 assert_firewall_unchanged
 
-# A terminal SIGINT reaches the real installer process, returns the conventional
-# status, reaps the whole process group and still removes the temporary checkout.
-new_case installer-interrupt
-enable_git
-: > "$CASE_ROOT/installer.wait"
-env -i \
-    PATH="$CASE_ROOT/bin" \
-    TMPDIR="$CASE_ROOT/tmp with spaces" \
-    ATUM_BOOTSTRAP_TEST_ROOT="$CASE_ROOT" \
-    "$PERL" "$ROOT/utests/presentation-signal-driver.pl" INT 130 \
-    "$CASE_ROOT/installer.ready" -- "$ROOT/bootstrap" --yes \
-    > "$CASE_ROOT/stdout" 2> "$CASE_ROOT/stderr"
-[ ! -e "$CASE_ROOT/installer.live" ]
-assert_no_checkout
-assert_firewall_unchanged
+# HUP, SIGINT and SIGTERM reach the real installer process, return conventional
+# statuses, reap the whole process group and remove the temporary checkout.
+for signal_case in 'HUP 129' 'INT 130' 'TERM 143'; do
+    set -- $signal_case
+    new_case "installer-signal-$1"
+    enable_git
+    : > "$CASE_ROOT/installer.wait"
+    env -i \
+        PATH="$CASE_ROOT/bin" \
+        TMPDIR="$CASE_ROOT/tmp with spaces" \
+        ATUM_BOOTSTRAP_TEST_ROOT="$CASE_ROOT" \
+        "$PERL" "$ROOT/utests/presentation-signal-driver.pl" "$1" "$2" \
+        "$CASE_ROOT/installer.ready" -- "$ROOT/bootstrap" --yes \
+        > "$CASE_ROOT/stdout" 2> "$CASE_ROOT/stderr"
+    [ ! -e "$CASE_ROOT/installer.live" ]
+    assert_private_checkout
+    assert_no_checkout
+    assert_firewall_unchanged
+done
 
-echo 'PASS  bootstrap acquisition, argument forwarding and failure cleanup'
+echo 'PASS  bootstrap acquisition, private checkout, umask restoration, argument forwarding and failure cleanup'

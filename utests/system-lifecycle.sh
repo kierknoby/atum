@@ -4,6 +4,7 @@ set -eu
 [ "$(id -u)" -eq 0 ] || { echo 'system lifecycle test requires root' >&2; exit 1; }
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 TEST_ROOT=$(mktemp -d /tmp/atum-system-test.XXXXXX)
+chmod 0711 "$TEST_ROOT"
 export ATUM_PREFIX="$TEST_ROOT/application"
 export ATUM_STATE_DIR="$TEST_ROOT/state"
 export ATUM_CONFIG_DIR="$TEST_ROOT/configuration"
@@ -11,10 +12,75 @@ export ATUM_TRANSACTION_DIR="$TEST_ROOT/transaction"
 export ATUM_LIFECYCLE_LOCK_PATH="$TEST_ROOT/lifecycle-lock"
 export ATUM_ADMIN_USER=testadmin
 export ATUM_ADMIN_PASSWORD_FILE="$TEST_ROOT/password"
-cleanup() { if [ -f "$ATUM_CONFIG_DIR/install-ledger.json" ]; then php "$ROOT/uninstall.php" --config-dir="$ATUM_CONFIG_DIR" --yes --keep-dependencies >/dev/null 2>&1 || true; fi; [ ! -L /usr/local/sbin/atum ] || [ "$(readlink /usr/local/sbin/atum)" != "$ATUM_PREFIX/bin/atum" ] || unlink /usr/local/sbin/atum; [ ! -L /usr/local/sbin/atum ] || [ "$(readlink /usr/local/sbin/atum)" != "$TEST_ROOT/default-site-restore/not-atum" ] || unlink /usr/local/sbin/atum; [ ! -L /usr/local/sbin/atum-uninstall ] || [ "$(readlink /usr/local/sbin/atum-uninstall)" != "$ATUM_PREFIX/uninstall.php" ] || unlink /usr/local/sbin/atum-uninstall; rm -rf "$TEST_ROOT"; }
+HTTP_SERVER_PID=
+cleanup() { [ -z "$HTTP_SERVER_PID" ] || kill "$HTTP_SERVER_PID" 2>/dev/null || true; if [ -f "$ATUM_CONFIG_DIR/install-ledger.json" ]; then php "$ROOT/uninstall.php" --config-dir="$ATUM_CONFIG_DIR" --yes --keep-dependencies >/dev/null 2>&1 || true; fi; [ ! -L /usr/local/sbin/atum ] || [ "$(readlink /usr/local/sbin/atum)" != "$ATUM_PREFIX/bin/atum" ] || unlink /usr/local/sbin/atum; [ ! -L /usr/local/sbin/atum ] || [ "$(readlink /usr/local/sbin/atum)" != "$TEST_ROOT/default-site-restore/not-atum" ] || unlink /usr/local/sbin/atum; [ ! -L /usr/local/sbin/atum-uninstall ] || [ "$(readlink /usr/local/sbin/atum-uninstall)" != "$ATUM_PREFIX/uninstall.php" ] || unlink /usr/local/sbin/atum-uninstall; rm -rf "$TEST_ROOT"; }
 trap cleanup EXIT HUP INT TERM
 printf '%s\n' 'Lifecycle test password 123' > "$ATUM_ADMIN_PASSWORD_FILE"
+chmod 0600 "$ATUM_ADMIN_PASSWORD_FILE"
 install_id=0123456789abcdef0123456789abcdef
+PHP_BINARY=$(command -v php)
+HTTP_PORT=18092
+
+assert_mode() {
+    [ "$(stat -c %a "$1")" = "$2" ] || { echo "unexpected mode for $1: $(stat -c %a "$1"), expected $2" >&2; exit 1; }
+}
+
+assert_install_permissions() {
+    assert_mode "$ATUM_PREFIX" 755
+    find "$ATUM_PREFIX" -type d ! -perm 0755 -print -quit | grep -q . && { echo 'application directory mode is not 0755' >&2; exit 1; }
+    while IFS= read -r relative; do
+        [ -n "$relative" ] || continue
+        case "$relative" in bin/atum|install|install.php|uninstall|uninstall.php) expected=755 ;; *) expected=644 ;; esac
+        assert_mode "$ATUM_PREFIX/$relative" "$expected"
+    done < "$ROOT/install-files.txt"
+    assert_mode "$ATUM_PREFIX/install-files.txt" 644
+    assert_mode "$ATUM_PREFIX/.atum-install-id" 600
+    [ "$(stat -c %U:%G "$ATUM_PREFIX")" = root:root ]
+
+    assert_mode "$ATUM_STATE_DIR" 700
+    find "$ATUM_STATE_DIR" -type d ! -perm 0700 -print -quit | grep -q . && { echo 'state directory mode is not 0700' >&2; exit 1; }
+    find "$ATUM_STATE_DIR" -type f ! -perm 0600 -print -quit | grep -q . && { echo 'state file mode is not 0600' >&2; exit 1; }
+    [ "$(stat -c %U:%G "$ATUM_STATE_DIR")" = atum:atum ]
+
+    assert_mode "$ATUM_CONFIG_DIR" 750
+    assert_mode "$ATUM_CONFIG_DIR/atum.conf" 640
+    assert_mode "$ATUM_CONFIG_DIR/install-ledger.json" 600
+    assert_mode "$ATUM_CONFIG_DIR/.atum-install-id" 600
+    [ "$(stat -c %U:%G "$ATUM_CONFIG_DIR")" = root:atum ]
+    [ "$(stat -c %U:%G "$ATUM_CONFIG_DIR/atum.conf")" = root:atum ]
+    [ "$(stat -c %U:%G "$ATUM_CONFIG_DIR/install-ledger.json")" = root:root ]
+}
+
+assert_web_access_and_http() {
+    id www-data >/dev/null 2>&1 || { echo 'www-data identity is required for permission regression' >&2; exit 1; }
+    runuser -u www-data -- test -x "$ATUM_PREFIX"
+    runuser -u www-data -- test -x "$ATUM_PREFIX/public"
+    runuser -u www-data -- test -r "$ATUM_PREFIX/public/index.php"
+    runuser -u www-data -- test -r "$ATUM_PREFIX/public/assets/atum.css"
+    if runuser -u www-data -- test -r "$ATUM_CONFIG_DIR/atum.conf"; then echo 'web-server identity can read Atum configuration' >&2; exit 1; fi
+    if runuser -u www-data -- test -r "$ATUM_CONFIG_DIR/install-ledger.json"; then echo 'web-server identity can read the ownership ledger' >&2; exit 1; fi
+    if runuser -u www-data -- test -r "$ATUM_STATE_DIR/atum.sqlite"; then echo 'web-server identity can read Atum state' >&2; exit 1; fi
+
+    # Model the deployed identity split: the web-server checks above resolve the
+    # public path, while the HTTP application process runs as the Atum FPM user.
+    runuser -u atum -- env ATUM_CONFIG_DIR="$ATUM_CONFIG_DIR" ATUM_STATE_DIR="$ATUM_STATE_DIR" ATUM_REQUIRE_HTTPS=false \
+        "$PHP_BINARY" -S "127.0.0.1:$HTTP_PORT" -t "$ATUM_PREFIX/public" > "$TEST_ROOT/installed-http-$HTTP_PORT.log" 2>&1 &
+    HTTP_SERVER_PID=$!
+    attempt=0
+    http_code=000
+    while [ "$attempt" -lt 20 ]; do
+        http_code=$(curl -sS -o "$TEST_ROOT/installed-http-$HTTP_PORT.body" -w '%{http_code}' "http://127.0.0.1:$HTTP_PORT/index.php" 2>/dev/null || true)
+        [ "$http_code" = 200 ] && break
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+    [ "$http_code" = 200 ]
+    grep -q 'Sign in' "$TEST_ROOT/installed-http-$HTTP_PORT.body"
+    kill "$HTTP_SERVER_PID"
+    wait "$HTTP_SERVER_PID" 2>/dev/null || true
+    HTTP_SERVER_PID=
+    HTTP_PORT=$((HTTP_PORT + 1))
+}
 
 # Recovery must never delete an atum identity it cannot prove it created: an
 # intended-* record alone describes a crash window, not proven ownership.
@@ -79,10 +145,11 @@ flock -u 8
 
 # Once the interrupted process has released the lock, normal recovery remains
 # available and the installation can proceed.
-"$ROOT/install" --development --allow-no-kamailio --no-deps --yes
+(umask 022; "$ROOT/install" --development --allow-no-kamailio --no-deps --yes)
 [ ! -e "$partial_host_file" ]
 [ -f "$ATUM_CONFIG_DIR/install-ledger.json" ] && [ ! -d "$ATUM_TRANSACTION_DIR" ]
 grep -q 'fake-atum-dependency' "$ATUM_CONFIG_DIR/install-ledger.json"
+assert_install_permissions
 
 if command -v runuser >/dev/null 2>&1; then
     if runuser -u atum -- sh -c 'exec 7< "$1"' sh "$ATUM_LIFECYCLE_LOCK_PATH" 2>/dev/null; then
@@ -273,7 +340,8 @@ export ATUM_STATE_DIR="$TEST_ROOT/checkout-install/state"
 export ATUM_CONFIG_DIR="$TEST_ROOT/checkout-install/configuration"
 export ATUM_TRANSACTION_DIR="$TEST_ROOT/checkout-install/transaction"
 mkdir -p "$TEST_ROOT/checkout-install"
-"$CHECKOUT/install" --development --allow-no-kamailio --no-deps --yes > "$TEST_ROOT/checkout-install.out"
+chmod 0755 "$TEST_ROOT/checkout-install"
+(umask 077; "$CHECKOUT/install" --development --allow-no-kamailio --no-deps --yes) > "$TEST_ROOT/checkout-install.out"
 (sed '/^[[:space:]]*$/d' "$CHECKOUT/install-files.txt"; printf '%s\n' install-files.txt) | sort -u > "$TEST_ROOT/expected-installed-files"
 find "$ATUM_PREFIX" -type f ! -name '.atum-install-id' ! -name '.atum-provisional-install-id' -printf '%P\n' | sort -u > "$TEST_ROOT/actual-installed-files"
 cmp "$TEST_ROOT/expected-installed-files" "$TEST_ROOT/actual-installed-files"
@@ -282,8 +350,66 @@ cmp "$TEST_ROOT/expected-installed-files" "$TEST_ROOT/actual-installed-files"
 [ "$(git -c safe.directory="$CHECKOUT" -C "$CHECKOUT" rev-parse HEAD)" = "$checkout_head_before" ]
 [ "$(sha256sum "$CHECKOUT/.git/index" | awk '{print $1}')" = "$checkout_index_before" ]
 [ "$(sha256sum "$CHECKOUT/operator-scratch/notes.txt" "$CHECKOUT/local-secret.php")" = "$scratch_before" ]
+assert_install_permissions
+assert_web_access_and_http
 /usr/local/sbin/atum-uninstall --config-dir="$ATUM_CONFIG_DIR" --yes --keep-dependencies >/dev/null
 [ ! -e "$ATUM_PREFIX" ] && [ ! -e "$ATUM_STATE_DIR" ] && [ ! -e "$ATUM_CONFIG_DIR" ]
 [ -d "$CHECKOUT/.git" ] && [ -f "$CHECKOUT/operator-scratch/notes.txt" ] && [ -f "$CHECKOUT/local-secret.php" ]
 [ "$(git -c safe.directory="$CHECKOUT" -C "$CHECKOUT" status --porcelain=v1 --untracked-files=all)" = "$checkout_status_before" ]
-echo 'PASS  locking, interrupted recovery, remote and Git-checkout install/uninstall lifecycle'
+
+# Exercise the live bootstrap/installer boundary with the caller itself at 077.
+# A local Git fixture supplies this exact work tree while retaining bootstrap's
+# clone verification and cleanup flow, avoiding any mutable network dependency.
+bootstrap_root="$TEST_ROOT/bootstrap-install"
+bootstrap_bin="$bootstrap_root/bin"
+mkdir -p "$bootstrap_bin" "$bootstrap_root/work"
+chmod 0755 "$bootstrap_root"
+cat > "$bootstrap_bin/git" <<'EOF'
+#!/bin/sh
+if [ "${1:-}" = -c ]; then shift 2; fi
+if [ "${1:-}" = -C ]; then shift 2; fi
+operation=${1:-}
+shift || true
+case "$operation" in
+    clone)
+        destination=
+        for argument in "$@"; do destination=$argument; done
+        /bin/mkdir -m 0700 "$destination"
+        /bin/cp -a "$ATUM_BOOTSTRAP_SOURCE/." "$destination/"
+        /bin/chmod 0700 "$destination"
+        /usr/bin/stat -c %a "${destination%/source}" > "$ATUM_BOOTSTRAP_RECORD/checkout.mode"
+        ;;
+    rev-parse) printf '%s\n' 0123456789abcdef0123456789abcdef01234567 ;;
+    diff|status) exit 0 ;;
+    *) exit 90 ;;
+esac
+EOF
+chmod 0755 "$bootstrap_bin/git"
+export ATUM_PREFIX="$bootstrap_root/application"
+export ATUM_STATE_DIR="$bootstrap_root/state"
+export ATUM_CONFIG_DIR="$bootstrap_root/configuration"
+export ATUM_TRANSACTION_DIR="$bootstrap_root/transaction"
+bootstrap_tmp="$bootstrap_root/tmp"
+mkdir "$bootstrap_tmp"
+(
+    umask 077
+    PATH="$bootstrap_bin:$TEST_ROOT/bin:$PATH" \
+        TMPDIR="$bootstrap_tmp" \
+        ATUM_BOOTSTRAP_SOURCE="$ROOT" \
+        ATUM_BOOTSTRAP_RECORD="$bootstrap_root" \
+        "$ROOT/bootstrap" --allow-no-kamailio --no-deps --yes
+) > "$bootstrap_root/bootstrap.out"
+[ "$(cat "$bootstrap_root/checkout.mode")" = 700 ]
+[ -z "$(find "$bootstrap_tmp" -mindepth 1 -maxdepth 1 -print)" ]
+assert_install_permissions
+assert_mode "$ATUM_CONFIG_DIR/tls" 750
+assert_mode "$ATUM_CONFIG_DIR/tls/development.crt" 644
+assert_mode "$ATUM_CONFIG_DIR/tls/development.key" 600
+[ "$(stat -c %U:%G "$ATUM_CONFIG_DIR/tls")" = root:root ]
+[ "$(stat -c %U:%G "$ATUM_CONFIG_DIR/tls/development.crt")" = root:root ]
+[ "$(stat -c %U:%G "$ATUM_CONFIG_DIR/tls/development.key")" = root:root ]
+assert_web_access_and_http
+PATH="$TEST_ROOT/bin:$PATH" /usr/local/sbin/atum-uninstall --config-dir="$ATUM_CONFIG_DIR" --yes --keep-dependencies >/dev/null
+[ ! -e "$ATUM_PREFIX" ] && [ ! -e "$ATUM_STATE_DIR" ] && [ ! -e "$ATUM_CONFIG_DIR" ]
+
+echo 'PASS  locking, recovery, deterministic permissions, restrictive-umask bootstrap/direct install, HTTP and uninstall lifecycle'

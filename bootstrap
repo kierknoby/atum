@@ -7,6 +7,7 @@ atum_bootstrap() {
     ASSUME_YES=0
     NO_DEPS=0
     CHECKOUT_ROOT=
+    PREVIOUS_UMASK=$(umask)
 
     say() { printf '%s\n' "$*"; }
     fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -14,6 +15,7 @@ atum_bootstrap() {
     cleanup() {
         status=$?
         trap - EXIT
+        umask "$PREVIOUS_UMASK"
         if [ -n "$CHECKOUT_ROOT" ]; then
             case "$CHECKOUT_ROOT" in
                 "${TMPDIR:-/tmp}"/atum-bootstrap.*) rm -rf -- "$CHECKOUT_ROOT" ;;
@@ -110,6 +112,10 @@ atum_bootstrap() {
     say "Commit: $COMMIT"
     say ""
 
+    # The checkout remains protected by the modes created under 077, but the
+    # installer is a separate lifecycle boundary and must inherit the caller's
+    # original file-creation policy rather than bootstrap's private one.
+    umask "$PREVIOUS_UMASK"
     if "$SOURCE_DIR/install" --development --remote "$@"; then
         exit 0
     else

@@ -149,17 +149,70 @@ function copyTree(string $source, string $target): void
     }
 }
 
-function chmodTreeOwner(string $path, string $user, string $group): void
+function setPathMode(string $path, int $mode): void
 {
-    @chown($path, $user);
-    @chgrp($path, $group);
+    if (!chmod($path, $mode)) {
+        throw new RuntimeException('Unable to set permissions on ' . $path);
+    }
+}
+
+function setPathOwner(string $path, string $user, string $group): void
+{
+    if (!chown($path, $user) || !chgrp($path, $group)) {
+        throw new RuntimeException('Unable to set ownership on ' . $path);
+    }
+}
+
+function setApplicationPermissions(string $path): void
+{
+    $executables = [
+        'bin/atum',
+        'install',
+        'install.php',
+        'uninstall',
+        'uninstall.php',
+    ];
+
+    setPathOwner($path, 'root', 'root');
+    setPathMode($path, 0755);
     $iterator = new RecursiveIteratorIterator(
         new RecursiveDirectoryIterator($path, FilesystemIterator::SKIP_DOTS),
         RecursiveIteratorIterator::SELF_FIRST
     );
     foreach ($iterator as $item) {
-        @chown($item->getPathname(), $user);
-        @chgrp($item->getPathname(), $group);
+        $itemPath = $item->getPathname();
+        if ($item->isLink()) {
+            throw new RuntimeException('Installed application contains an unexpected symbolic link: ' . $itemPath);
+        }
+        setPathOwner($itemPath, 'root', 'root');
+        $relative = substr($itemPath, strlen($path) + 1);
+        if ($item->isDir()) {
+            setPathMode($itemPath, 0755);
+        } elseif (in_array($relative, $executables, true)) {
+            setPathMode($itemPath, 0755);
+        } elseif (in_array($relative, ['.atum-provisional-install-id', '.atum-install-id'], true)) {
+            setPathMode($itemPath, 0600);
+        } else {
+            setPathMode($itemPath, 0644);
+        }
+    }
+}
+
+function setStatePermissions(string $path): void
+{
+    setPathOwner($path, 'atum', 'atum');
+    setPathMode($path, 0700);
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($path, FilesystemIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::SELF_FIRST
+    );
+    foreach ($iterator as $item) {
+        $itemPath = $item->getPathname();
+        if ($item->isLink()) {
+            throw new RuntimeException('Atum state contains an unexpected symbolic link: ' . $itemPath);
+        }
+        setPathOwner($itemPath, 'atum', 'atum');
+        setPathMode($itemPath, $item->isDir() ? 0700 : 0600);
     }
 }
 
@@ -191,20 +244,27 @@ try {
     if (!mkdir($stage, 0755, true) && !is_dir($stage)) { throw new RuntimeException('Unable to create staging directory ' . $stage); }
     file_put_contents($stage . '/.atum-provisional-install-id', $installId . "\n", LOCK_EX);
     copyTree($source, $stage);
+    setApplicationPermissions($stage);
     $created[] = ['type' => 'directory', 'path' => $target];
 
     journalWrite($transactionDir, 'intended-state', "1\n");
     if (!mkdir($stateDir, 0700, true) && !is_dir($stateDir)) {
         throw new RuntimeException('Unable to create ' . $stateDir);
     }
+    setPathMode($stateDir, 0700);
     file_put_contents($stateDir . '/.atum-provisional-install-id', $installId . "\n", LOCK_EX);
+    setPathMode($stateDir . '/.atum-provisional-install-id', 0600);
     journalWrite($transactionDir, 'created-state', "1\n");
     $created[] = ['type' => 'directory', 'path' => $stateDir];
     journalWrite($transactionDir, 'intended-configuration', "1\n");
     if (!mkdir($configDir, 0750, true) && !is_dir($configDir)) {
         throw new RuntimeException('Unable to create ' . $configDir);
     }
+    setPathOwner($configDir, 'root', 'atum');
+    setPathMode($configDir, 0750);
     file_put_contents($configDir . '/.atum-provisional-install-id', $installId . "\n", LOCK_EX);
+    setPathOwner($configDir . '/.atum-provisional-install-id', 'root', 'root');
+    setPathMode($configDir . '/.atum-provisional-install-id', 0600);
     journalWrite($transactionDir, 'created-configuration', "1\n");
     $created[] = ['type' => 'directory', 'path' => $configDir];
 
@@ -218,7 +278,8 @@ try {
     if (file_put_contents($configDir . '/atum.conf', $config, LOCK_EX) === false) {
         throw new RuntimeException('Unable to write Atum configuration.');
     }
-    @chmod($configDir . '/atum.conf', 0640);
+    setPathOwner($configDir . '/atum.conf', 'root', 'atum');
+    setPathMode($configDir . '/atum.conf', 0640);
 
     journalWrite($transactionDir, 'intended-application', "1\n");
     if (!rename($stage, $target)) {
@@ -231,15 +292,11 @@ try {
         if (file_put_contents($ownedTree . '/.atum-install-id', $installId . "\n", LOCK_EX) === false) {
             throw new RuntimeException('Unable to mark Atum-owned path ' . $ownedTree);
         }
-        @chmod($ownedTree . '/.atum-install-id', 0600);
+        setPathMode($ownedTree . '/.atum-install-id', 0600);
         @unlink($ownedTree . '/.atum-provisional-install-id');
     }
-
-    @chmod($target . '/bin/atum', 0755);
-    @chmod($target . '/install', 0755);
-    @chmod($target . '/install.php', 0755);
-    @chmod($target . '/uninstall', 0755);
-    @chmod($target . '/uninstall.php', 0755);
+    setPathOwner($target . '/.atum-install-id', 'root', 'root');
+    setPathOwner($configDir . '/.atum-install-id', 'root', 'root');
 
     journalWrite($transactionDir, 'host-created-cli', "symlink\n{$cliLink}\n{$target}/bin/atum\n");
     if (!symlink($target . '/bin/atum', $cliLink)) {
@@ -379,9 +436,8 @@ try {
     ];
     $ledgerPath = $configDir . '/install-ledger.json';
     journalWrite($configDir, 'install-ledger.json', json_encode($ledger, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
-    @chmod($ledgerPath, 0600);
-    @chown($ledgerPath, 'root');
-    @chgrp($ledgerPath, 'root');
+    setPathOwner($ledgerPath, 'root', 'root');
+    setPathMode($ledgerPath, 0600);
 
     $safeFacts = [
         'installed_at' => $ledger['installed_at'],
@@ -392,9 +448,7 @@ try {
     ];
     file_put_contents($stateDir . '/install-facts.json', json_encode($safeFacts, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n", LOCK_EX);
 
-    chmodTreeOwner($stateDir, 'atum', 'atum');
-    @chgrp($configDir, 'atum');
-    @chgrp($configDir . '/atum.conf', 'atum');
+    setStatePermissions($stateDir);
 
     $committed = true;
     if ($options['administrator-output-fd'] === '7') {

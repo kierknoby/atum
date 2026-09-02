@@ -44,11 +44,17 @@ Remote mode additionally owns an individual Nginx/Apache vhost or drop-in, an in
 
 Where possible, Atum should own complete directory trees rather than place individual files inside unrelated application directories.
 
+Installed permissions are an installer invariant and do not depend on the invoking shell's umask. The manifest-defined, immutable application payload is root-owned: directories are `0755`, ordinary files are `0644`, and the five executable installer/CLI entry points are `0755`. This permits Nginx/Apache to traverse and read `public`, and permits the dedicated PHP-FPM account to load application code, without granting either identity application write access. The application ownership marker is the exception at `0600`.
+
+Atum state is recursively `atum:atum`, with directories `0700` and files `0600`. `/etc/atum` is `root:atum` mode `0750`; `atum.conf` is `root:atum` mode `0640`, while the install ledger and configuration ownership marker are `root:root` mode `0600`. In remote mode, `/etc/atum/tls` is `root:root` mode `0750`, the development certificate is `0644`, and its private key is `0600`. Application readability therefore does not expose credentials, sessions, audit data, the ownership ledger, or TLS private material.
+
 ## Source Checkout Boundary
 
 The Git checkout is an installation source, not an installed Atum path. `install-files.txt` is the authoritative list copied into the application tree. `.git`, tests and arbitrary tracked or untracked checkout content are excluded unless explicitly listed in that manifest.
 
 Installation, failed-install recovery and uninstall must not modify or remove the checkout. Updating the checkout does not update the separate installed application. v0.1 has no supported in-place update or state-preserving replacement procedure.
+
+The bootstrap records the caller's umask, uses `077` while creating and populating its temporary checkout, and restores the recorded value before invoking the real installer. Cleanup retains signal and failure handling, and the checkout remains private by its already-established directory modes. The installer still establishes the permission invariant above explicitly, including when the caller deliberately uses `077`.
 
 ## Lifecycle Lock
 

@@ -59,6 +59,9 @@ final class AtumRemoteDeployment
         if (!is_dir($tlsDir) && !mkdir($tlsDir, 0750, true) && !is_dir($tlsDir)) {
             throw new RuntimeException('Unable to create the Atum TLS directory.');
         }
+        if (!chmod($tlsDir, 0750)) {
+            throw new RuntimeException('Unable to secure the Atum TLS directory.');
+        }
         $certificate = $tlsDir . '/development.crt';
         $key = $tlsDir . '/development.key';
         if (file_exists($certificate) || file_exists($key)) {
@@ -79,8 +82,10 @@ final class AtumRemoteDeployment
                 $output
             ));
         }
-        chmod($key, 0600);
-        chmod($certificate, 0644);
+        if (!chmod($key, 0600) || !chmod($certificate, 0644)) {
+            @unlink($certificate); @unlink($key);
+            throw new RuntimeException('Unable to secure generated Atum TLS material.');
+        }
         $this->recordFile($certificate);
         $this->recordFile($key);
 
