@@ -365,16 +365,19 @@ foreach ($disabledDefaultSites as $entry) {
     }
 }
 
-// Shared services are reloaded, never removed. A failed reload leaves the
-// ledger intact and uninstall can be retried after the host issue is fixed.
-foreach (($ledger['host_integrations']['reload_services'] ?? []) as $service) {
-    if (!is_string($service) || !preg_match('/^[A-Za-z0-9@_.-]+$/', $service)) {
-        throw new RuntimeException('Invalid reload service name in install ledger.');
+// Restore each service to the state captured before Atum activated its
+// integration. Services remain host-owned: Atum never disables them here.
+foreach (($ledger['host_integrations']['service_states'] ?? []) as $serviceState) {
+    $service = is_array($serviceState) ? (string) ($serviceState['service'] ?? '') : '';
+    $wasActive = is_array($serviceState) ? ($serviceState['active'] ?? null) : null;
+    if (!preg_match('/^[A-Za-z0-9@_.-]+$/', $service) || !is_bool($wasActive)) {
+        throw new RuntimeException('Invalid service-state record in install ledger.');
     }
     if (commandExists('systemctl')) {
-        passthru('systemctl reload ' . escapeshellarg($service), $reloadStatus);
-        if ($reloadStatus !== 0) {
-            throw new RuntimeException('Unable to reload host service after removing Atum integration: ' . $service);
+        $action = $wasActive ? 'reload' : 'stop';
+        passthru('systemctl ' . $action . ' ' . escapeshellarg($service), $serviceStatus);
+        if ($serviceStatus !== 0) {
+            throw new RuntimeException('Unable to ' . $action . ' host service after removing Atum integration: ' . $service);
         }
     }
 }

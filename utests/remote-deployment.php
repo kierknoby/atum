@@ -14,7 +14,7 @@ $paths = [
 ];
 foreach ($paths as $path) { mkdir($path, 0700, true); }
 $service = $temporary . '/service';
-file_put_contents($service, "#!/bin/sh\nprintf '%s\\n' \"\$*\" >> " . escapeshellarg($temporary . '/services.log') . "\n");
+file_put_contents($service, "#!/bin/sh\nprintf '%s\\n' \"\$*\" >> " . escapeshellarg($temporary . '/services.log') . "\nstate_dir=" . escapeshellarg($temporary) . "\nstate=\"\$state_dir/service-active-\$2\"\ncase \"\$1\" in\nis-active) [ -f \"\$state\" ] || exit 3 ;;\nstart) : > \"\$state\" ;;\nreload) [ -f \"\$state\" ] ;;\nstop) rm -f \"\$state\" ;;\nesac\n");
 chmod($service, 0700);
 
 function expect(bool $condition, string $message): void
@@ -83,6 +83,7 @@ try {
         mkdir($apacheRoot . '/' . $directory, 0700, true);
     }
     $apacheLogOffset = filesize($temporary . '/services.log');
+    file_put_contents($temporary . '/service-active-php8.3-fpm', 'active');
     $apacheDeployment = new AtumRemoteDeployment($apacheRoot . '/transaction');
     $apacheResult = $apacheDeployment->install([
         'target' => $apacheRoot . '/application', 'state-dir' => $apacheRoot . '/state', 'config-dir' => $apacheRoot . '/config',
@@ -102,6 +103,30 @@ try {
     expect(str_contains($apacheCommands, 'reload php8.3-fpm') && !str_contains($apacheCommands, 'start php8.3-fpm'), 'Pre-existing PHP-FPM was not reloaded.');
     $apacheDeployment->rollback($service);
     expect(!is_link($apacheRoot . '/enabled/atum.conf') && !is_file($apacheRoot . '/available/atum.conf'), 'Apache rollback left Atum integration behind.');
+
+    $deferredRoot = $temporary . '/deferred-publication';
+    foreach (['transaction', 'config', 'state', 'available', 'enabled', 'fpm'] as $directory) {
+        mkdir($deferredRoot . '/' . $directory, 0700, true);
+    }
+    $deferredLogOffset = filesize($temporary . '/services.log');
+    $deferredDeployment = new AtumRemoteDeployment($deferredRoot . '/transaction');
+    $deferred = $deferredDeployment->prepare([
+        'target' => $deferredRoot . '/application', 'state-dir' => $deferredRoot . '/state', 'config-dir' => $deferredRoot . '/config',
+        'listen-address' => '127.0.0.1', 'listen-port' => '10443', 'web-server' => 'apache',
+        'web-config' => $deferredRoot . '/available/atum.conf', 'web-enable-link' => $deferredRoot . '/enabled/atum.conf',
+        'web-service' => 'apache2', 'web-group' => 'www-data', 'fpm-config' => $deferredRoot . '/fpm/atum.conf',
+        'fpm-socket' => '/run/php/atum-fpm.sock', 'fpm-service' => 'php8.3-fpm',
+        'fpm-binary' => $service, 'web-config-test-binary' => $service, 'web-config-test-argument' => 'configtest',
+        'service-command' => $service, 'openssl' => '/usr/bin/openssl',
+    ]);
+    $deferredCommands = substr((string) file_get_contents($temporary . '/services.log'), $deferredLogOffset);
+    expect(!is_link($deferredRoot . '/enabled/atum.conf') && !preg_match('/\b(is-active|start|reload|stop)\b/', $deferredCommands), 'Remote validation published an endpoint or changed a service.');
+    $deferredDeployment->activate([
+        'web-config' => $deferredRoot . '/available/atum.conf', 'web-enable-link' => $deferredRoot . '/enabled/atum.conf',
+        'fpm-service' => 'php8.3-fpm', 'web-service' => 'apache2', 'service-command' => $service,
+    ], $deferred);
+    expect(is_link($deferredRoot . '/enabled/atum.conf'), 'Remote endpoint was not published after activation.');
+    $deferredDeployment->rollback($service);
 
     $failureRoot = $temporary . '/validation-failure';
     foreach (['transaction', 'config', 'state', 'host', 'fpm'] as $directory) { mkdir($failureRoot . '/' . $directory, 0700, true); }

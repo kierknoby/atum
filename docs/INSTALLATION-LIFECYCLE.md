@@ -40,7 +40,7 @@ The default system paths are:
 /usr/local/sbin/atum-uninstall
 ```
 
-Remote mode additionally owns an individual Nginx/Apache vhost or drop-in, an individual PHP-FPM pool, an optional Apache enablement symlink, and generated certificate/key files under `/etc/atum/tls`. Each is provisionally journalled before installation commits and recorded with its hash or symlink target in the final ledger.
+Remote mode additionally owns an individual Nginx/Apache vhost or drop-in, an individual PHP-FPM pool, an optional Apache enablement symlink, and generated certificate/key files under `/etc/atum/tls`. Each is provisionally journalled before installation commits and recorded with its hash or symlink target in the final ledger. The service state observed before Atum activates the validated integration is recorded so rollback, interrupted-install recovery and uninstall can restore that state without claiming ownership of the service.
 
 Where possible, Atum should own complete directory trees rather than place individual files inside unrelated application directories.
 
@@ -155,7 +155,7 @@ The built-in server remains loopback-only. Explicit remote mode uses HTTPS on th
 
 Successful remote-install output uses an explicit bind address directly. For wildcard binds it may display the current SSH server address or a single unambiguous non-loopback host address; otherwise it prints `https://<server-address>:PORT/`. IPv6 literals are bracketed. This is presentation of locally available information, not a claim of public reachability, and no external address-discovery service is used.
 
-When Atum introduces the selected web server on Debian/Ubuntu, it creates a temporary `policy-rc.d` only when no administrator policy already exists, preventing package-maintainer service starts while dependencies are installed. The temporary policy is journalled and removed on success, failure, and interrupted-install recovery. Atum then disables only the unmodified package default enablement link (`nginx` `sites-enabled/default` or Apache `sites-enabled/000-default.conf`), records its target in the ledger, validates the Atum PHP-FPM and HTTPS configurations, and only then starts the new web server. Uninstall restores that link only if its path remains unclaimed. For an existing selected web server, this safety mechanism does not change its default configuration or prior service state; normal remote deployment still adds the Atum-owned vhost and reloads that service after native validation.
+When Atum introduces the selected web server on Debian/Ubuntu, it creates a temporary `policy-rc.d` only when no administrator policy already exists, preventing package-maintainer service starts while dependencies are installed. The temporary policy is journalled and removed on success, failure, and interrupted-install recovery. Atum then disables only the unmodified package default enablement link (`nginx` `sites-enabled/default` or Apache `sites-enabled/000-default.conf`), records its target in the ledger, and validates the Atum PHP-FPM and HTTPS configurations. The validated endpoint is activated only after the initial administrator and state permissions are complete. Activation reloads services that are currently active and starts services that are currently inactive; it records their previous states. Uninstall restores that state without disabling a shared service. Uninstall restores a package default link only if its path remains unclaimed.
 
 ## Module Host Mutations
 

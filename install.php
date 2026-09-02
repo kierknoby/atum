@@ -324,7 +324,7 @@ try {
     if ($options['remote'] === '1') {
         require_once $target . '/admin/libraries/Atum/RemoteDeployment.class.php';
         $remoteDeployment = new AtumRemoteDeployment($transactionDir);
-        $remoteIntegration = $remoteDeployment->install([
+        $remoteIntegration = $remoteDeployment->prepare([
             'target' => $target,
             'state-dir' => $stateDir,
             'config-dir' => $configDir,
@@ -390,10 +390,31 @@ try {
         }
     }
 
+    $installedAt = gmdate(DATE_ATOM);
+    $safeFacts = [
+        'installed_at' => $installedAt,
+        'atum_version' => (string) ($atum->Modules->getInfo('framework')['version'] ?? 'unknown'),
+        'os_id' => $options['os-id'],
+        'install_path' => $target,
+        'kamailio_config' => $kamailioConfig,
+    ];
+    file_put_contents($stateDir . '/install-facts.json', json_encode($safeFacts, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n", LOCK_EX);
+    setStatePermissions($stateDir);
+
+    if ($remoteDeployment instanceof AtumRemoteDeployment && is_array($remoteIntegration)) {
+        $remoteIntegration = $remoteDeployment->activate([
+            'web-config' => $options['web-config'],
+            'web-enable-link' => $options['web-enable-link'],
+            'fpm-service' => $options['fpm-service'],
+            'web-service' => $options['web-service'],
+            'service-command' => $options['service-command'],
+        ], $remoteIntegration);
+    }
+
     $ledger = [
         'schema' => 1,
         'install_id' => $installId,
-        'installed_at' => gmdate(DATE_ATOM),
+        'installed_at' => $installedAt,
         'atum_version' => (string) ($atum->Modules->getInfo('framework')['version'] ?? 'unknown'),
         'os_id' => $options['os-id'],
         'package_manager' => $options['package-manager'],
@@ -421,7 +442,7 @@ try {
             'created_files' => $remoteIntegration['created_files'] ?? [],
             'modified_files' => [],
             'disabled_default_sites' => $disabledDefaultSites,
-            'reload_services' => $remoteIntegration['reload_services'] ?? [],
+            'service_states' => $remoteIntegration['service_states'] ?? [],
         ],
         'remote_development' => $remoteIntegration === null ? null : [
             'enabled' => true,
@@ -438,17 +459,6 @@ try {
     journalWrite($configDir, 'install-ledger.json', json_encode($ledger, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
     setPathOwner($ledgerPath, 'root', 'root');
     setPathMode($ledgerPath, 0600);
-
-    $safeFacts = [
-        'installed_at' => $ledger['installed_at'],
-        'atum_version' => $ledger['atum_version'],
-        'os_id' => $ledger['os_id'],
-        'install_path' => $target,
-        'kamailio_config' => $kamailioConfig,
-    ];
-    file_put_contents($stateDir . '/install-facts.json', json_encode($safeFacts, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n", LOCK_EX);
-
-    setStatePermissions($stateDir);
 
     $committed = true;
     if ($options['administrator-output-fd'] === '7') {

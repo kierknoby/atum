@@ -459,11 +459,11 @@ recover_transaction() {
         case "$old_unit" in *[!A-Za-z0-9@_.-]*|'') fail "Interrupted-install journal contains an invalid enabled unit." ;; esac
         "$SERVICE_COMMAND" disable --now "$old_unit" >/dev/null 2>&1 || fail "Unable to disable package-enabled unit during recovery: $old_unit"
     done
-    for record in "$TRANSACTION_DIR"/reload-service-*; do
+    for record in "$TRANSACTION_DIR"/service-state-*; do
         [ -f "$record" ] || continue
-        old_service=$(sed -n '1p' "$record")
+        old_service=$(sed -n '1p' "$record"); old_state=$(sed -n '2p' "$record")
         case "$old_service" in *[!A-Za-z0-9@_.-]*|'') fail "Interrupted-install journal contains an invalid service name." ;; esac
-        "$SERVICE_COMMAND" reload "$old_service" >/dev/null 2>&1 || true
+        case "$old_state" in active) "$SERVICE_COMMAND" reload "$old_service" >/dev/null 2>&1 || true ;; inactive) "$SERVICE_COMMAND" stop "$old_service" >/dev/null 2>&1 || true ;; *) fail "Interrupted-install journal contains an invalid service state." ;; esac
     done
     for key in application-stage application state configuration; do
         [ -f "$TRANSACTION_DIR/intended-$key" ] || [ -f "$TRANSACTION_DIR/created-$key" ] || continue

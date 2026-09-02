@@ -7,8 +7,8 @@ final class AtumRemoteDeployment
 {
     /** @var list<array{type:string,path:string,sha256?:string,target?:string}> */
     private array $created = [];
-    /** @var list<string> */
-    private array $reloadServices = [];
+    /** @var list<array{service:string,active:bool}> */
+    private array $serviceStates = [];
     private bool $verbose = false;
 
     public function __construct(private readonly string $transactionDir)
@@ -16,9 +16,18 @@ final class AtumRemoteDeployment
     }
 
     /** @param array<string,string> $options
-     *  @return array{created_files:array,reload_services:array,web_server:string,fpm_service:string,tls_certificate:string,tls_key:string}
+     *  @return array{created_files:array,service_states:array,web_server:string,fpm_service:string,tls_certificate:string,tls_key:string}
      */
     public function install(array $options): array
+    {
+        $result = $this->prepare($options);
+        return $this->activate($options, $result);
+    }
+
+    /** @param array<string,string> $options
+     *  @return array{created_files:array,service_states:array,web_server:string,fpm_service:string,tls_certificate:string,tls_key:string}
+     */
+    public function prepare(array $options): array
     {
         $this->verbose = ($options['verbose'] ?? '0') === '1';
         $required = ['target', 'config-dir', 'listen-address', 'listen-port', 'web-server',
@@ -97,36 +106,45 @@ final class AtumRemoteDeployment
             : $this->apacheConfig($options, $certificate, $key);
         $this->createFile($options['web-config'], $web, 0644);
 
-        if (($options['web-enable-link'] ?? '') !== '') {
-            $this->createLink($options['web-enable-link'], $options['web-config']);
-        }
-
         $this->validateCommand($options['fpm-binary'], '-t', 'PHP-FPM');
         $this->validateCommand($options['web-config-test-binary'], $options['web-config-test-argument'], ucfirst($options['web-server']));
 
-        $this->reloadServices = array_values(array_unique([$options['fpm-service'], $options['web-service']]));
-        foreach ($this->reloadServices as $index => $service) {
-            $record = $this->transactionDir . '/reload-service-' . ($index + 1);
-            if (file_put_contents($record, $service . "\n", LOCK_EX) === false) {
-                throw new RuntimeException('Unable to journal a service reload.');
-            }
-            chmod($record, 0600);
-            $action = ($service === $options['web-service'] && ($options['start-web-service'] ?? '0') === '1')
-                || ($service === $options['fpm-service'] && ($options['start-fpm-service'] ?? '0') === '1') ? 'start' : 'reload';
-            $this->service($options['service-command'] ?? 'systemctl', $action, $service);
-            if ($action === 'start') {
-                $this->service($options['service-command'] ?? 'systemctl', 'is-active', $service);
-            }
-        }
-
         return [
             'created_files' => $this->created,
-            'reload_services' => $this->reloadServices,
+            'service_states' => [],
             'web_server' => $options['web-server'],
             'fpm_service' => $options['fpm-service'],
             'tls_certificate' => $certificate,
             'tls_key' => $key,
         ];
+    }
+
+    /** @param array<string,string> $options
+     *  @param array{created_files:array,service_states:array,web_server:string,fpm_service:string,tls_certificate:string,tls_key:string} $result
+     *  @return array{created_files:array,service_states:array,web_server:string,fpm_service:string,tls_certificate:string,tls_key:string}
+     */
+    public function activate(array $options, array $result): array
+    {
+        if (($options['web-enable-link'] ?? '') !== '') {
+            $this->createLink($options['web-enable-link'], $options['web-config']);
+        }
+
+        foreach (array_values(array_unique([$options['fpm-service'], $options['web-service']])) as $index => $service) {
+            $wasActive = $this->serviceIsActive($options['service-command'] ?? 'systemctl', $service);
+            $record = $this->transactionDir . '/service-state-' . ($index + 1);
+            if (file_put_contents($record, $service . "\n" . ($wasActive ? 'active' : 'inactive') . "\n", LOCK_EX) === false) {
+                throw new RuntimeException('Unable to journal a service state.');
+            }
+            chmod($record, 0600);
+            $this->serviceStates[] = ['service' => $service, 'active' => $wasActive];
+            $action = $wasActive ? 'reload' : 'start';
+            $this->service($options['service-command'] ?? 'systemctl', $action, $service);
+            $this->service($options['service-command'] ?? 'systemctl', 'is-active', $service);
+        }
+
+        $result['created_files'] = $this->created;
+        $result['service_states'] = $this->serviceStates;
+        return $result;
     }
 
     /** @param array<string,string> $options */
@@ -346,6 +364,27 @@ final class AtumRemoteDeployment
         }
     }
 
+    private function serviceIsActive(string $command, string $service): bool
+    {
+        if (!preg_match('/^[A-Za-z0-9@_.-]+$/', $service)) {
+            throw new RuntimeException('Invalid service name.');
+        }
+        $commandLine = escapeshellarg($command) . ' is-active ' . escapeshellarg($service);
+        $this->showCommand($commandLine);
+        exec($commandLine . ' 2>&1', $output, $status);
+        $this->showOutput($output);
+        if ($status === 0) {
+            return true;
+        }
+        if ($status === 3) {
+            return false;
+        }
+        throw new RuntimeException($this->withCommandOutput(
+            'Unable to determine service state for ' . $service . '.',
+            $output
+        ));
+    }
+
     private function validateCommand(string $command, string $argument, string $label): void
     {
         $commandLine = escapeshellarg($command) . ' ' . escapeshellarg($argument);
@@ -394,8 +433,10 @@ final class AtumRemoteDeployment
                 @unlink($path);
             }
         }
-        foreach ($this->reloadServices as $service) {
-            try { $this->service($serviceCommand, 'reload', $service); } catch (Throwable) { }
+        foreach ($this->serviceStates as $serviceState) {
+            try {
+                $this->service($serviceCommand, $serviceState['active'] ? 'reload' : 'stop', $serviceState['service']);
+            } catch (Throwable) { }
         }
     }
 

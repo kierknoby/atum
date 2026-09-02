@@ -195,7 +195,15 @@ mkdir -p "$TEST_ROOT/remote" "$TEST_ROOT/host/nginx" "$TEST_ROOT/host/fpm" "$TES
 test_php_mm=$(php -r 'echo PHP_MAJOR_VERSION,".",PHP_MINOR_VERSION;')
 printf '%s\n' '#!/bin/sh' "echo \"PHP $test_php_mm.0 (fpm-fcgi)\"" > "$ATUM_FPM_BINARY"
 printf '%s\n' '#!/bin/sh' 'exit 0' > "$TEST_ROOT/bin/nginx"
-printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$*" >> "'"$TEST_ROOT"'/service-actions"' > "$ATUM_SERVICE_COMMAND"
+printf '%s\n' '#!/bin/sh' \
+    'printf "%s\n" "$*" >> "'"$TEST_ROOT"'/service-actions"' \
+    'case "$1" in' \
+    '  is-active) [ -f "'"$TEST_ROOT"'/service-active-$2" ] || exit 3 ;;' \
+    '  start) : > "'"$TEST_ROOT"'/service-active-$2" ;;' \
+    '  reload) [ -f "'"$TEST_ROOT"'/service-active-$2" ] ;;' \
+    '  stop) rm -f "'"$TEST_ROOT"'/service-active-$2" ;;' \
+    '  disable) rm -f "'"$TEST_ROOT"'/service-active-$3" ;;' \
+    'esac' > "$ATUM_SERVICE_COMMAND"
 chmod 0755 "$ATUM_FPM_BINARY" "$ATUM_SERVICE_COMMAND" "$TEST_ROOT/bin/nginx"
 printf '%s\n' 'pre-existing host configuration' > "$TEST_ROOT/host/nginx/operator.conf"
 # Model interruption after a remote host file was created but before ledger commit.
@@ -210,7 +218,8 @@ printf '%s\n' "$remote_install_id" > "$ATUM_STATE_DIR/.atum-provisional-install-
 printf '%s\n' 'interrupted Atum FPM configuration' > "$ATUM_FPM_POOL_DIR/atum.conf"
 interrupted_hash=$(sha256sum "$ATUM_FPM_POOL_DIR/atum.conf" | awk '{print $1}')
 printf '%s\n%s\n%s\n' file "$ATUM_FPM_POOL_DIR/atum.conf" "$interrupted_hash" > "$ATUM_TRANSACTION_DIR/host-created-1"
-printf '%s\n' php-test-fpm > "$ATUM_TRANSACTION_DIR/reload-service-1"
+printf '%s\n%s\n' php-test-fpm inactive > "$ATUM_TRANSACTION_DIR/service-state-1"
+printf '%s\n' php-test-fpm > "$ATUM_TRANSACTION_DIR/package-enabled-unit-1"
 PATH="$TEST_ROOT/bin:$PATH" "$ROOT/install" --remote --allow-no-kamailio --no-deps --yes >"$TEST_ROOT/remote-no-development.out" 2>&1 && { echo 'remote mode accepted without --development' >&2; exit 1; }
 PATH="$TEST_ROOT/bin:$PATH" "$ROOT/install" --development --remote --allow-no-kamailio --no-deps --yes > "$TEST_ROOT/remote-install.out"
 grep -q 'Recovering interrupted Atum installation' "$TEST_ROOT/remote-install.out"
@@ -238,6 +247,10 @@ grep -q '^OPEN ATUM:$' "$TEST_ROOT/remote-install.out"
 grep -q '^  https://' "$TEST_ROOT/remote-install.out"
 grep -q '^  atum-uninstall --check$' "$TEST_ROOT/remote-install.out"
 grep -q '"remote_development"' "$ATUM_CONFIG_DIR/install-ledger.json"
+grep -q '"service_states"' "$ATUM_CONFIG_DIR/install-ledger.json"
+[ -f "$TEST_ROOT/service-active-php-test-fpm" ] && [ -f "$TEST_ROOT/service-active-nginx-test" ]
+grep -q '^disable --now php-test-fpm$' "$TEST_ROOT/service-actions"
+grep -q '^start php-test-fpm$' "$TEST_ROOT/service-actions"
 [ -f "$ATUM_NGINX_CONFIG_DIR/atum.conf" ] && [ -f "$ATUM_FPM_POOL_DIR/atum.conf" ]
 [ "$(stat -c %a "$ATUM_CONFIG_DIR/tls/development.key")" = 600 ]
 grep -q "$ATUM_PREFIX/public" "$ATUM_NGINX_CONFIG_DIR/atum.conf"
@@ -273,6 +286,7 @@ cp "$TEST_ROOT/expected-nginx.conf" "$ATUM_NGINX_CONFIG_DIR/atum.conf"
 PATH="$TEST_ROOT/bin:$PATH" php "$ROOT/uninstall.php" --config-dir="$ATUM_CONFIG_DIR" --yes --keep-dependencies >/dev/null
 [ ! -e "$ATUM_NGINX_CONFIG_DIR/atum.conf" ] && [ ! -e "$ATUM_FPM_POOL_DIR/atum.conf" ]
 [ -f "$TEST_ROOT/host/nginx/operator.conf" ]
+[ ! -e "$TEST_ROOT/service-active-php-test-fpm" ] && [ ! -e "$TEST_ROOT/service-active-nginx-test" ]
 ! grep -Eq '(^| )(ufw|firewall-cmd|iptables|nft)( |$)' "$TEST_ROOT/service-actions"
 
 # Reproduce the live KAM0 ledger sequence: a disabled default site and correct

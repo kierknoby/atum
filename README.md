@@ -220,7 +220,7 @@ sudo ./install --check --remote
 sudo ./install --development --remote
 ```
 
-It remains **NOT SUITABLE FOR PRODUCTION.** The installer reuses an existing supported Nginx or Apache installation; when neither exists, it selects Nginx by default and can offer to install it from the host's normal package repositories. It creates a dedicated `atum` PHP-FPM pool and exposes only Atum's `public/` directory over HTTPS. When Atum owns the TLS setup, it generates a self-signed development certificate. The default listen port is 8443. It does not modify firewall rules.
+It remains **NOT SUITABLE FOR PRODUCTION.** The installer reuses an existing supported Nginx or Apache installation; when neither exists, it selects Nginx by default and can offer to install it from the host's normal package repositories. It creates a dedicated `atum` PHP-FPM pool and exposes only Atum's `public/` directory over HTTPS. It validates the generated PHP-FPM and web-server configuration before activating the endpoint, and activates it only after the initial administrator exists and Atum state permissions are normalized. When Atum owns the TLS setup, it generates a self-signed development certificate. The default listen port is 8443. It does not modify firewall rules.
 
 Normal installation output reports the verified bind and renders the safest useful URL available. For an explicit address it uses that address. For a wildcard bind it prefers the server address from the current SSH connection, otherwise it uses a single unambiguous non-loopback host address. If no address is clearly preferable it prints a neutral placeholder:
 
