@@ -70,6 +70,24 @@ $systemMapManifest = AtumManifest::parse($root . '/admin/modules/systemmap/modul
 $callHandlingManifest = AtumManifest::parse($root . '/admin/modules/callhandling/module.xml');
 check($systemMapManifest['menuitems'][0]['category'] === 'System' && $systemMapManifest['permission'] === 'systemmap.view' && $systemMapManifest['depends'] === ['framework', 'discovery'], 'System Map registers as a least-privilege System module over Discovery');
 check($callHandlingManifest['menuitems'][0]['category'] === 'Routing' && $callHandlingManifest['permission'] === 'callhandling.view' && $callHandlingManifest['depends'] === ['framework', 'discovery'], 'Call Handling registers as a least-privilege Routing module over Discovery');
+$stylesheet = (string) file_get_contents($root . '/public/assets/atum.css');
+check((bool) preg_match('/\.app-shell\s*\{(?=[^}]*\bwidth:\s*100%)(?=[^}]*\bmax-width:\s*100%)(?=[^}]*\bmin-width:\s*0)[^}]*grid-template-columns:\s*220px\s+minmax\(0,\s*1fr\)/s', $stylesheet)
+    && (bool) preg_match('/\.content\s*\{(?=[^}]*\bwidth:\s*100%)(?=[^}]*\bmax-width:\s*100%)(?=[^}]*\bmin-width:\s*0)/s', $stylesheet), 'application shell and content column explicitly contain intrinsic child width');
+check((bool) preg_match('/\.table-wrap,\s*\.journey-flow\s*\{(?=[^}]*\bwidth:\s*100%)(?=[^}]*\bmax-width:\s*100%)(?=[^}]*\bmin-width:\s*0)(?=[^}]*\boverflow-x:\s*auto)/s', $stylesheet), 'wide table and flow regions use a viewport-contained local horizontal scroller');
+check(str_contains($stylesheet, 'table { width: 100%; border-collapse: collapse; }')
+    && !preg_match('/\.table-wrap[^}]*overflow-x:\s*scroll\b/is', $stylesheet)
+    && !preg_match('/(?:^|})\s*(?:th|td|th\s*,\s*td)\s*\{[^}]*(?:white-space|overflow-wrap|word-break)\s*:/is', $stylesheet), 'ordinary tables keep their natural full width without forced scrollbars or cell-wide wrapping overrides');
+check(str_contains($stylesheet, '.content > *, .panel, .panel-body { max-width: 100%; min-width: 0; }')
+    && str_contains($stylesheet, '.module-card { min-width: 0;')
+    && str_contains($stylesheet, '.system-map-panel, .system-summary, .journey { min-width: 0;'), 'nested content, data cards and operator views allow grid and flex descendants to shrink');
+check(!preg_match('/(?:^|})\s*(?:html|body|html\s*,\s*body)\s*\{[^}]*overflow-x:\s*hidden\b/is', $stylesheet), 'layout containment does not rely on global horizontal clipping');
+$tableCount = 0; $wrappedTableCount = 0;
+foreach (glob($root . '/admin/modules/*/views/*.php') ?: [] as $viewFile) {
+    $viewSource = (string) file_get_contents($viewFile);
+    $tableCount += preg_match_all('/<table\b/i', $viewSource);
+    $wrappedTableCount += preg_match_all('/<(?:div|section)\b[^>]*class="[^"]*\btable-wrap\b[^"]*"[^>]*>\s*<table\b/is', $viewSource);
+}
+check($tableCount > 0 && $wrappedTableCount === $tableCount, 'all shared module table markup uses the reusable local scroll wrapper');
 removeFixture($fixture);
 
 $interpretationFixture = sys_get_temp_dir() . '/atum-interpretation-' . bin2hex(random_bytes(5)); mkdir($interpretationFixture, 0700);
