@@ -8,7 +8,6 @@ class Discovery extends AtumModule
 {
     private const VIEWS = [
         'overview' => 'Overview',
-        'call-flow' => 'Call Flow',
         'connectivity' => 'Connectivity',
         'routing' => 'Routing',
         'media' => 'Media',
@@ -21,6 +20,14 @@ class Discovery extends AtumModule
         $config ??= (string) $this->Atum->Config->get('KAMAILIO_CONFIG');
         $report = (new AtumKamailioScanner())->scan($config);
         return (new AtumKamailioSemantics())->present($report);
+    }
+
+    /** @return array<string,mixed> */
+    public function systemModel(?string $config = null): array
+    {
+        $model = $this->scan($config)['system_model'] ?? null;
+        if (!is_array($model)) { throw new RuntimeException('Kamailio System Model is unavailable'); }
+        return $model;
     }
 
     public function showPage(?string $view = null): string

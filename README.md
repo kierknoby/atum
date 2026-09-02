@@ -382,6 +382,8 @@ Atum currently includes:
 
 - **Framework**: core services, authentication, state, module loading, permissions, AJAX dispatch and views.
 - **Dashboard**: Atum and host overview.
+- **System Map**: a connected, operator-facing view of the adopted SIP system and its major relationships.
+- **Call Handling**: evidence-backed new-call, existing-call, termination, cancellation and registration journeys where recognised.
 - **Kamailio Discovery**: read-only discovery of existing Kamailio configuration.
 - **Module Admin**: Atum module inventory and dependency-aware install, uninstall, enable and disable controls.
 - **Administrators**: local Atum administrator accounts and roles.
@@ -405,9 +407,11 @@ The Discovery module currently identifies:
 
 Discovery fails closed for configuration values. Only a small positive classification of non-secret scalar tuning values is returned; other parameter and define values are redacted before reaching the GUI, AJAX response or CLI output.
 
-Discovery also presents a conservative system interpretation above the detailed inventory. It correlates positively discovered listeners, recognised modules, named routes and include provenance to describe available signalling and routing support. A module load alone is presented as available support, not proof of active use; stronger wording requires corroborating route evidence. Custom routes are grouped by configuration component but their internals are not interpreted.
+Discovery is now the evidence engine beneath a shared, read-only Atum System Model. The scanner's canonical, redacted facts feed structural and domain interpretation; the System Model then describes SIP interfaces, evidence-backed server roles, call journeys, routing stages, backend knowledge, media relationships, access handling, custom components, outcomes and system-level understanding gaps. System Map and Call Handling consume that model directly rather than scraping Discovery pages or parsing rendered labels.
 
-For a growing, statically recognised subset of common routing constructs, Discovery presents existing Kamailio installations through operator-oriented views: an overview, call flow, connectivity, routing, media, and access/registration. Technical configuration evidence remains available for verification. It shows route entry points, recognised method/in-dialog/IP conditions, static route calls, reply/failure/branch wiring, high-value SIP actions and relay or local-reply termination points. Arguments and custom statements remain redacted. This is static, conservative configuration interpretation, not a compiler or observation of live SIP traffic; arbitrary logic, dynamic route targets and runtime-dependent behavior may remain custom or unresolved. The adopted Kamailio configuration remains authoritative.
+System Map gives an administrator a concise connected architecture view; Call Handling explains only journeys established by evidence, in telephony terms. Discovery retains connectivity, routing, media, access and detailed Configuration & Evidence views. Its low-level processing trace, raw route relationships and file/line provenance remain available there for verification rather than serving as the primary system explanation.
+
+The System Model is primarily configuration-derived in this milestone. It distinguishes known destinations from external selection mechanisms and unresolved final targets, and has a read-only provider boundary for future backing-data or runtime evidence. It does not connect to operational databases, claim current call activity or infer an SBC role from media/NAT support alone.
 
 The Media view aggregates recognised RTPengine/RTPProxy operations into call setup, reply, established-call and cleanup stages. It identifies cleanup reasons only when a recognised condition or configured failure/reply relationship supports that wording; other cleanup paths remain explicitly unknown. Loaded media support is kept separate from use found in the interpreted route flow.
 

@@ -54,6 +54,19 @@ Modules can also be loaded through the module service accessor:
 Atum::Discovery();
 ```
 
+## SIP System Model
+
+Kamailio discovery is an evidence pipeline rather than the operator UI contract:
+
+```text
+configuration facts → structural semantics → domain interpretation
+                    → shared Atum System Model → operator modules
+```
+
+`AtumKamailioSystemModel` is a read-only boundary above the scanner and semantic control-flow model. It exposes structured server roles, SIP interfaces, journeys, routing stages, destinations, media, access handling, custom components, outcomes, evidence references and system-level gaps. System Map and Call Handling consume this shared model. Discovery retains the detailed processing trace and provenance used to verify its conclusions.
+
+The model records whether evidence is static configuration, backing data or runtime data. This release populates static evidence and defines a read-only provider interface for future backing/runtime sources; it does not make database connectivity or runtime RPC a requirement.
+
 ## Module Layout
 
 Each module lives under:

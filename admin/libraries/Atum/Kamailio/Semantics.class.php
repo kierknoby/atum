@@ -1,6 +1,8 @@
 <?php
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+require_once __DIR__ . '/SystemModel.class.php';
+
 /**
  * Adds conservative operator-facing meaning to factual Kamailio discovery.
  *
@@ -98,6 +100,8 @@ final class AtumKamailioSemantics
         'www_authorize' => ['meaning' => 'Check WWW authentication', 'category' => 'authentication'],
         'proxy_authorize' => ['meaning' => 'Check proxy authentication', 'category' => 'authentication'],
         'consume_credentials' => ['meaning' => 'Consume authentication credentials', 'category' => 'authentication'],
+        'mf_process_maxfwd_header' => ['meaning' => 'Check request forwarding limit', 'category' => 'validation'],
+        'sanity_check' => ['meaning' => 'Validate SIP request structure', 'category' => 'validation'],
         'ds_select_dst' => ['meaning' => 'Select dispatcher destination', 'category' => 'dispatching'],
         'ds_select_domain' => ['meaning' => 'Select dispatcher domain', 'category' => 'dispatching'],
         'ds_next_dst' => ['meaning' => 'Select next dispatcher destination', 'category' => 'dispatching'],
@@ -155,14 +159,15 @@ final class AtumKamailioSemantics
         ];
         $report['presentation']['system'] = $this->systemPresentation($report, $recognised, $total - $recognised);
         $report['presentation']['request_processing'] = $this->requestProcessing($report);
-        $report['presentation']['operator'] = $this->operatorPresentation(
-            $report['presentation']['request_processing'],
-            $report['presentation']['system'],
-            $report
-        );
         $report['presentation']['media'] = $this->mediaPresentation(
             $report['presentation']['request_processing'],
             $report['modules'] ?? []
+        );
+        $report['system_model'] = (new AtumKamailioSystemModel())->build($report);
+        $report['presentation']['operator'] = $this->operatorPresentation(
+            $report['system_model'],
+            $report['presentation']['request_processing'],
+            $report['presentation']['system']
         );
 
         return $report;
@@ -203,38 +208,16 @@ final class AtumKamailioSemantics
     }
 
     /** @return array<string,mixed> */
-    private function operatorPresentation(array $processing, array $system, array $report): array
+    private function operatorPresentation(array $model, array $processing, array $system): array
     {
         $flows = $processing['flows'] ?? [];
-        $request = null;
-        foreach ($flows as $flow) { if (($flow['type'] ?? '') === 'request_route') { $request = $flow; break; } }
         $allSteps = [];
         foreach ($flows as $flow) { foreach (($flow['statements'] ?? []) as $step) { $allSteps[] = $step + ['route_type' => $flow['type'] ?? '', 'route_id' => $flow['id'] ?? -1, 'route_name' => $flow['name'] ?? null]; } }
-        $has = static fn(string $category): bool => (bool) array_filter($allSteps, static fn(array $step): bool => ($step['category'] ?? '') === $category);
-        $requestSteps = $request['statements'] ?? [];
-        $stages = [];
-        foreach ($requestSteps as $step) {
-            $stage = match ($step['kind']) {
-                'condition' => ['title' => $this->operatorCondition($step['meaning']), 'kind' => 'branch'],
-                'route-call' => ['title' => 'Apply routing policy', 'kind' => 'routing'],
-                'wiring' => ['title' => 'Prepare dedicated reply, failure, or branch handling', 'kind' => 'wiring'],
-                'unresolved-route-call', 'custom' => ['title' => 'Custom logic', 'kind' => 'custom'],
-                default => $this->operatorAction($step),
-            };
-            $stage['evidence'] = [$step];
-            $stage['conditions'] = $step['conditions'] ?? [];
-            $last = array_key_last($stages);
-            if ($last !== null && $stages[$last]['title'] === $stage['title'] && $stages[$last]['conditions'] === $stage['conditions']) {
-                $stages[$last]['evidence'][] = $step;
-            } else { $stages[] = $stage; }
-        }
-        $roles = [];
-        if (($system['listeners'] ?? []) !== []) { $roles[] = 'Accepts SIP signalling.'; }
-        if ($request !== null && array_filter($requestSteps, static fn(array $step): bool => ($step['terminal'] ?? false) === true)) { $roles[] = 'Processes incoming requests and forwards or terminates them according to routing policy.'; }
-        if ($has('dispatching')) { $roles[] = 'Selects an upstream or backend destination from dispatcher data.'; }
-        if ($has('media')) { $roles[] = 'Uses media-relay processing in the interpreted call path.'; }
-        if ($has('registration')) { $roles[] = 'Contains local endpoint registration or location handling.'; }
-        if ($has('authentication')) { $roles[] = 'Contains subscriber authentication handling.'; }
+        $stages = array_map(static function (array $stage): array {
+            $evidence = array_map(static fn(array $item): array => ($item['semantic'] ?? []) + ['source' => $item['source'] ?? [], 'confidence' => $item['confidence'] ?? 'unknown'], $stage['evidence'] ?? []);
+            return ['title' => $stage['label'], 'kind' => $stage['kind'], 'evidence' => $evidence, 'conditions' => []];
+        }, $model['journeys']['new-call']['stages'] ?? []);
+        $roles = array_column($model['server']['roles'] ?? [], 'summary');
         if ($roles === []) { $roles[] = 'Atum could not derive a broad operator role from the interpreted configuration.'; }
         $media = array_values(array_filter($allSteps, static fn(array $step): bool => ($step['category'] ?? '') === 'media'));
         $access = array_values(array_filter($allSteps, static fn(array $step): bool => in_array(($step['category'] ?? ''), ['registration', 'authentication'], true)));
@@ -330,35 +313,6 @@ final class AtumKamailioSemantics
         if ($flow['type'] === 'failure_route' && isset($wired[$flow['id']])) { return 'On a configured transaction failure path'; }
         if ($this->hasCondition($step, 'If the request is in-dialog')) { return 'During an existing call'; }
         return 'Other media path; trigger not statically determined';
-    }
-
-    /** @return array{title:string,kind:string} */
-    private function operatorAction(array $step): array
-    {
-        return match ($step['category'] ?? '') {
-            'routing' => ['title' => 'Keep this proxy in the call signalling path', 'kind' => 'routing'],
-            'dispatching' => ['title' => 'Select backend destination', 'kind' => 'routing'],
-            'media' => ['title' => 'Process call media', 'kind' => 'media'],
-            'nat' => ['title' => 'Handle NAT traversal', 'kind' => 'access'],
-            'registration' => ['title' => 'Handle endpoint registration or location', 'kind' => 'access'],
-            'authentication' => ['title' => 'Authenticate endpoint', 'kind' => 'access'],
-            'reply' => ['title' => 'Send local SIP response', 'kind' => 'outcome'],
-            'transaction' => ['title' => ($step['terminal'] ?? false) ? 'Forward SIP request' : 'Manage SIP transaction', 'kind' => 'outcome'],
-            default => match ($step['meaning'] ?? '') {
-                'Drop request' => ['title' => 'Drop request', 'kind' => 'outcome'],
-                'Stop route processing' => ['title' => 'Stop processing', 'kind' => 'outcome'],
-                'Return to calling route' => ['title' => 'Return to previous routing stage', 'kind' => 'outcome'],
-                default => ['title' => 'Custom logic', 'kind' => 'custom'],
-            },
-        };
-    }
-
-    private function operatorCondition(string $meaning): string
-    {
-        return match ($meaning) {
-            'If the request is in-dialog' => 'Requests within an existing dialog',
-            default => str_starts_with($meaning, 'If request method is ') ? substr($meaning, 3) . ' requests' : str_replace('If ', 'Requests ', $meaning),
-        };
     }
 
     /** @return array<string,mixed> */
@@ -563,7 +517,7 @@ final class AtumKamailioSemantics
         $endpoint = $address . (isset($match[3]) ? ':' . $match[3] : '');
         $label = ['udp' => 'SIP over UDP', 'tcp' => 'SIP over TCP', 'tls' => 'SIP over TLS', 'sctp' => 'SIP over SCTP', 'ws' => 'SIP over WebSocket', 'wss' => 'SIP over secure WebSocket'][$transport] ?? strtoupper($transport);
         $nonLoopback = !in_array(trim($address, '[]'), ['127.0.0.1', '::1', 'localhost'], true);
-        return ['label' => $label, 'description' => $label . ' listening on ' . $endpoint . ($nonLoopback ? ' (non-loopback address).' : '.'), 'source' => $listener['source'], 'confidence' => (string) ($listener['source']['confidence'] ?? 'unknown')];
+        return ['label' => $label, 'description' => $label . ' listening on ' . $endpoint . ($nonLoopback ? ' (non-loopback address).' : '.'), 'transport' => $transport, 'address' => $address, 'port' => isset($match[3]) ? (int) $match[3] : null, 'non_loopback' => $nonLoopback, 'source' => $listener['source'], 'confidence' => (string) ($listener['source']['confidence'] ?? 'unknown')];
     }
 
     /** @return array<string,mixed> */

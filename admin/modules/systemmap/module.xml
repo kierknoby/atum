@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module>
+  <rawname>systemmap</rawname>
+  <name>System Map</name>
+  <version>0.1.0</version>
+  <publisher>FreePBX UK</publisher>
+  <license>GPL-3.0-or-later</license>
+  <category>System</category>
+  <permission>systemmap.view</permission>
+  <description>Operator-facing map of the adopted SIP system.</description>
+  <permissions><permission><id>systemmap.view</id><description>View the SIP System Map</description></permission></permissions>
+  <enabled>true</enabled>
+  <depends><module>framework</module><module>discovery</module></depends>
+  <menuitems>
+    <item><id>systemmap</id><name>System Map</name><category>System</category><sort>5</sort><permission>systemmap.view</permission></item>
+  </menuitems>
+</module>

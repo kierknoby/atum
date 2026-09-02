@@ -47,11 +47,6 @@ $sourceLabel = static function (array $source, string $root): string {
       <section class="panel"><div class="panel-heading"><h2>Incoming request path</h2></div><div class="panel-body compact-stage-list">
         <?php foreach ($operator['stages'] as $stage): ?><article class="operator-stage operator-stage-<?= $e($stage['kind']) ?>"><strong><?= $e($stage['title']) ?></strong><?php if ($stage['conditions'] !== []): ?><span><?= $e(implode(' / ', $stage['conditions'])) ?></span><?php endif; ?></article><?php endforeach; ?>
       </div></section>
-    <?php elseif ($view === 'call-flow'): ?>
-      <section class="panel"><div class="panel-heading"><h2>Call flow</h2></div><div class="panel-body visual-flow">
-        <?php foreach ($operator['stages'] as $stage): ?><article class="operator-stage operator-stage-<?= $e($stage['kind']) ?>"><strong><?= $e($stage['title']) ?></strong><?php if ($stage['conditions'] !== []): ?><span><?= $e(implode(' / ', $stage['conditions'])) ?></span><?php endif; ?><details><summary>Technical details</summary><ul><?php foreach ($stage['evidence'] as $evidence): ?><li><?= $e($evidence['meaning']) ?> <code><?= $e($evidence['source']['file']) ?>:<?= (int) $evidence['source']['line'] ?></code></li><?php endforeach; ?></ul></details></article><?php endforeach; ?>
-        <?php if ($operator['gaps'] !== []): ?><article class="operator-stage operator-stage-custom"><strong>Custom logic</strong><span>Atum cannot yet interpret <?= count($operator['gaps']) ?> processing step<?= count($operator['gaps']) === 1 ? '' : 's' ?>.</span></article><?php endif; ?>
-      </div></section>
     <?php elseif ($view === 'connectivity'): ?>
       <section class="panel"><div class="panel-heading"><h2>Where SIP traffic enters</h2></div><div class="panel-body operator-list"><?php foreach ($operator['connectivity'] as $listener): ?><article><strong><?= $e($listener['label']) ?></strong><p><?= $e($listener['description']) ?></p><details><summary>Technical details</summary><code><?= $e($listener['source']['file']) ?>:<?= (int) $listener['source']['line'] ?></code></details></article><?php endforeach; ?></div></section>
     <?php elseif ($view === 'routing'): ?>
@@ -78,8 +73,8 @@ $sourceLabel = static function (array $source, string $root): string {
     <?php endif; ?>
 
     <?php if ($view === 'evidence'): ?>
-    <section class="panel request-processing">
-      <div class="panel-heading"><h2>How requests are handled</h2></div>
+    <section class="panel request-processing" id="processing-trace">
+      <div class="panel-heading"><h2>Processing Trace</h2></div>
       <div class="panel-body">
         <p class="flow-intro">Static interpretation of recognised routing constructs. It describes configured control flow, not observed SIP traffic.</p>
         <p class="flow-coverage"><strong>Route interpretation:</strong> <?= (int) $requestProcessing['coverage']['recognised'] ?> recognised statements · <?= (int) $requestProcessing['coverage']['custom'] ?> custom statements · <?= (int) $requestProcessing['coverage']['unresolved'] ?> unresolved route calls</p>

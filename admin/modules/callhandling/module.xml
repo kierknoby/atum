@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module>
+  <rawname>callhandling</rawname>
+  <name>Call Handling</name>
+  <version>0.1.0</version>
+  <publisher>FreePBX UK</publisher>
+  <license>GPL-3.0-or-later</license>
+  <category>Routing</category>
+  <permission>callhandling.view</permission>
+  <description>Operator-facing SIP and call journeys from the shared System Model.</description>
+  <permissions><permission><id>callhandling.view</id><description>View interpreted call handling</description></permission></permissions>
+  <enabled>true</enabled>
+  <depends><module>framework</module><module>discovery</module></depends>
+  <menuitems>
+    <item><id>callhandling</id><name>Call Handling</name><category>Routing</category><sort>10</sort><permission>callhandling.view</permission></item>
+  </menuitems>
+</module>

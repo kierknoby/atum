@@ -15,6 +15,9 @@ php -S "127.0.0.1:$PORT" -t "$ROOT/public" >"$TEST_DIR/server.log" 2>&1 & SERVER
 i=0; while ! curl -fsS -c "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/index.php" > "$TEST_DIR/login"; do i=$((i+1)); [ "$i" -lt 20 ] || exit 1; sleep 1; done
 csrf=$(sed -n 's/.*name="csrf" value="\([^"]*\)".*/\1/p' "$TEST_DIR/login" | head -n1)
 [ -n "$csrf" ]
+curl -fsS -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/index.php?display=systemmap" > "$TEST_DIR/unauthorized-system-map"
+grep -q 'Sign in' "$TEST_DIR/unauthorized-system-map"
+! grep -q 'System architecture' "$TEST_DIR/unauthorized-system-map"
 before_session=$(awk '$6=="ATUMSESSID"{print $7}' "$TEST_DIR/cookies")
 attempt=0; while [ "$attempt" -lt 5 ]; do curl -sS -b "$TEST_DIR/cookies" -d "login=1&csrf=$csrf&username=httpviewer&password=wrong" "http://127.0.0.1:$PORT/index.php" >/dev/null; attempt=$((attempt+1)); done
 curl -sS -b "$TEST_DIR/cookies" -d "login=1&csrf=$csrf&username=httpviewer&password=HTTP%20viewer%20password%20123" "http://127.0.0.1:$PORT/index.php" | grep -q 'Invalid username or password'
@@ -31,23 +34,41 @@ grep -q 'class="menu-item active"' "$TEST_DIR/discovery-page"
 grep -q '>Discovery' "$TEST_DIR/discovery-page"
 grep -q 'class="menu-child active"[^>]*>Overview' "$TEST_DIR/discovery-page"
 grep -q 'display=discovery&amp;view=media' "$TEST_DIR/discovery-page"
+! grep -q 'display=discovery&amp;view=call-flow' "$TEST_DIR/discovery-page"
+grep -q 'display=systemmap' "$TEST_DIR/discovery-page"
+grep -q 'display=callhandling' "$TEST_DIR/discovery-page"
+grep -q 'class="menu-category">System' "$TEST_DIR/discovery-page"
+grep -q 'class="menu-category">Routing' "$TEST_DIR/discovery-page"
 grep -q 'display=moduleadmin' "$TEST_DIR/discovery-page"
 grep -q 'What this server does' "$TEST_DIR/discovery-page"
 grep -q 'Incoming request path' "$TEST_DIR/discovery-page"
-grep -q 'Apply routing policy' "$TEST_DIR/discovery-page"
+grep -q 'Routing policy' "$TEST_DIR/discovery-page"
 ! grep -q 'ds_select_dst' "$TEST_DIR/discovery-page"
-curl -fsS -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/index.php?display=discovery&view=call-flow" > "$TEST_DIR/call-flow-page"
-grep -q 'class="menu-child active"[^>]*>Call Flow' "$TEST_DIR/call-flow-page"
-grep -q 'Call flow' "$TEST_DIR/call-flow-page"
-grep -q 'Technical details' "$TEST_DIR/call-flow-page"
-grep -q 'Call route\[DISPATCH\]' "$TEST_DIR/call-flow-page"
+curl -fsS -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/index.php?display=systemmap" > "$TEST_DIR/system-map-page"
+grep -q 'class="menu-item active"' "$TEST_DIR/system-map-page"
+grep -q '>System Map' "$TEST_DIR/system-map-page"
+grep -q 'System architecture' "$TEST_DIR/system-map-page"
+grep -q 'SIP signalling' "$TEST_DIR/system-map-page"
+grep -q 'Backend selection' "$TEST_DIR/system-map-page"
+grep -q 'View Discovery evidence' "$TEST_DIR/system-map-page"
+! grep -Eq 'request_route|route\[|onreply_route|failure_route|t_relay|t_on_reply|rtpengine_manage|rtpengine_delete|ds_select_dst|has_totag|\$ru|\$du' "$TEST_DIR/system-map-page"
+! grep -q 'flow-route' "$TEST_DIR/system-map-page"
+curl -fsS -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/index.php?display=callhandling" > "$TEST_DIR/call-handling-page"
+grep -q 'class="menu-item active"' "$TEST_DIR/call-handling-page"
+grep -q '>Call Handling' "$TEST_DIR/call-handling-page"
+grep -q 'Recognised journey' "$TEST_DIR/call-handling-page"
+grep -q 'New calls' "$TEST_DIR/call-handling-page"
+grep -q 'Select destination' "$TEST_DIR/call-handling-page"
+grep -q 'View Discovery evidence' "$TEST_DIR/call-handling-page"
+! grep -Eq 'request_route|route\[|onreply_route|failure_route|t_relay|t_on_reply|rtpengine_manage|rtpengine_delete|ds_select_dst|has_totag|\$ru|\$du' "$TEST_DIR/call-handling-page"
+! grep -q 'flow-route' "$TEST_DIR/call-handling-page"
 curl -fsS -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/index.php?display=discovery&view=media" > "$TEST_DIR/media-page"
 grep -q 'Media handling' "$TEST_DIR/media-page"
 grep -q 'No recognised media relay module was found' "$TEST_DIR/media-page"
 ! grep -q 'Apply RTPengine media processing' "$TEST_DIR/media-page"
 ! grep -q 'Delete RTPengine media session' "$TEST_DIR/media-page"
 curl -fsS -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/index.php?display=discovery&view=evidence" > "$TEST_DIR/discovery-evidence-page"
-grep -q 'How requests are handled' "$TEST_DIR/discovery-evidence-page"
+grep -q 'Processing Trace' "$TEST_DIR/discovery-evidence-page"
 grep -q 'System interpretation' "$TEST_DIR/discovery-evidence-page"
 grep -q 'Configuration composition' "$TEST_DIR/discovery-evidence-page"
 grep -q 'Detected module support' "$TEST_DIR/discovery-evidence-page"
@@ -75,6 +96,8 @@ grep -q 'Sign in' "$TEST_DIR/revalidated"
 csrf=$(sed -n 's/.*name="csrf" value="\([^"]*\)".*/\1/p' "$TEST_DIR/revalidated" | head -n1)
 curl -sS -c "$TEST_DIR/cookies" -b "$TEST_DIR/cookies" -d "login=1&csrf=$csrf&username=httplimited&password=HTTP%20limited%20password%20123" -o /dev/null "http://127.0.0.1:$PORT/index.php"
 [ "$(curl -sS -o /dev/null -w '%{http_code}' -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/index.php?display=discovery&view=media")" = 200 ]
+[ "$(curl -sS -o /dev/null -w '%{http_code}' -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/index.php?display=systemmap")" = 200 ]
+[ "$(curl -sS -o /dev/null -w '%{http_code}' -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/index.php?display=callhandling")" = 200 ]
 [ "$(curl -sS -o /dev/null -w '%{http_code}' -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/index.php?display=moduleadmin")" = 404 ]
 [ "$(curl -sS -o /dev/null -w '%{http_code}' -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/ajax.php?module=userman&command=delete")" = 403 ]
 
@@ -106,4 +129,5 @@ secure_viewer_csrf=$(sed -n 's/.*name="csrf" value="\([^"]*\)".*/\1/p' "$TEST_DI
 curl -sS -D "$TEST_DIR/secure-viewer-login-headers" -H "Cookie: ATUMSESSID=$secure_viewer_session" -d "login=1&csrf=$secure_viewer_csrf&username=httplimited&password=HTTP%20limited%20password%20123" "http://127.0.0.1:$PORT/index.php" -o /dev/null
 secure_viewer_session=$(sed -n 's/^Set-Cookie: ATUMSESSID=\([^;]*\).*/\1/ip' "$TEST_DIR/secure-viewer-login-headers" | head -n1)
 [ "$(curl -sS -o /dev/null -w '%{http_code}' -H "Cookie: ATUMSESSID=$secure_viewer_session" "http://127.0.0.1:$PORT/index.php?display=moduleadmin")" = 404 ]
-echo 'PASS  HTTP authentication, throttling, rotation, expiry, revalidation, CSRF, method, allowlist and asset boundary checks'
+[ "$(curl -sS -o /dev/null -w '%{http_code}' -H "Cookie: ATUMSESSID=$secure_viewer_session" "http://127.0.0.1:$PORT/index.php?display=systemmap")" = 200 ]
+echo 'PASS  HTTP System Map, Call Handling, navigation/RBAC, authentication, CSRF and asset boundary checks'

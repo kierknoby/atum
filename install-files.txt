@@ -32,6 +32,7 @@ admin/libraries/Atum/Ajax.class.php
 admin/libraries/Atum/System.class.php
 admin/libraries/Atum/Kamailio/Scanner.class.php
 admin/libraries/Atum/Kamailio/Semantics.class.php
+admin/libraries/Atum/Kamailio/SystemModel.class.php
 admin/views/layout.php
 admin/views/login.php
 admin/modules/framework/Framework.class.php
@@ -51,6 +52,14 @@ admin/modules/discovery/uninstall.php
 admin/modules/discovery/page.discovery.php
 admin/modules/discovery/views/default.php
 admin/modules/discovery/assets/js/discovery.js
+admin/modules/systemmap/Systemmap.class.php
+admin/modules/systemmap/module.xml
+admin/modules/systemmap/page.systemmap.php
+admin/modules/systemmap/views/default.php
+admin/modules/callhandling/Callhandling.class.php
+admin/modules/callhandling/module.xml
+admin/modules/callhandling/page.callhandling.php
+admin/modules/callhandling/views/default.php
 admin/modules/moduleadmin/Moduleadmin.class.php
 admin/modules/moduleadmin/module.xml
 admin/modules/moduleadmin/install.php

@@ -63,9 +63,13 @@ check($presentedModules['sl']['source'] === $rawSl['source'] && $presentedModule
 check(count($presentedModules['sl']['params']) === 3 && $presentedModules['tm']['params'] === [], 'modules with and without discovered parameters are preserved');
 check(AtumKamailioSemantics::recognisedModuleNames() === array_values(array_unique(AtumKamailioSemantics::recognisedModuleNames())), 'recognised module catalogue is deterministic and unique');
 $discoveryManifest = AtumManifest::parse($root . '/admin/modules/discovery/module.xml');
-check(array_column($discoveryManifest['menuitems'][0]['children'], 'id') === ['overview', 'call-flow', 'connectivity', 'routing', 'media', 'access', 'evidence'], 'manifest supports deterministic reusable child navigation entries');
+check(array_column($discoveryManifest['menuitems'][0]['children'], 'id') === ['overview', 'connectivity', 'routing', 'media', 'access', 'evidence'], 'Discovery keeps technical trace navigation under Configuration and Evidence');
 $dashboardManifest = AtumManifest::parse($root . '/admin/modules/dashboard/module.xml');
 check($dashboardManifest['menuitems'][0]['children'] === [], 'flat menu manifests remain backward compatible');
+$systemMapManifest = AtumManifest::parse($root . '/admin/modules/systemmap/module.xml');
+$callHandlingManifest = AtumManifest::parse($root . '/admin/modules/callhandling/module.xml');
+check($systemMapManifest['menuitems'][0]['category'] === 'System' && $systemMapManifest['permission'] === 'systemmap.view' && $systemMapManifest['depends'] === ['framework', 'discovery'], 'System Map registers as a least-privilege System module over Discovery');
+check($callHandlingManifest['menuitems'][0]['category'] === 'Routing' && $callHandlingManifest['permission'] === 'callhandling.view' && $callHandlingManifest['depends'] === ['framework', 'discovery'], 'Call Handling registers as a least-privilege Routing module over Discovery');
 removeFixture($fixture);
 
 $interpretationFixture = sys_get_temp_dir() . '/atum-interpretation-' . bin2hex(random_bytes(5)); mkdir($interpretationFixture, 0700);
@@ -152,9 +156,9 @@ check($policyFlow['statements'][0]['meaning'] === 'If request method is INVITE' 
 check(count($requestProcessing['edges']) === 7 && $requestProcessing['coverage']['unresolved'] === 1 && $requestProcessing['coverage']['custom'] >= 1, 'graph records static route and reply/failure/branch edges while retaining unresolved/custom nodes');
 check($requestProcessing['coverage']['cycles'] !== [] && array_column($requestProcessing['coverage']['unreferenced'], 'name') === ['ORPHAN'], 'graph detects recursive calls and reports only no-static-reference routes');
 check(!str_contains((string) $routeJson, 'secret media flags') && !str_contains((string) $routeJson, 'secret-material'), 'route action arguments and custom statements remain redacted');
-check(in_array('Selects an upstream or backend destination from dispatcher data.', $operator['overview'], true) && in_array('Uses media-relay processing in the interpreted call path.', $operator['overview'], true), 'operator overview synthesises server roles without requiring Kamailio terminology');
-check(array_column($operator['stages'], 'title') === ['Keep this proxy in the call signalling path', 'Prepare dedicated reply, failure, or branch handling', 'Apply routing policy', 'Custom logic', 'Forward SIP request'], 'operator flow compresses sequential request operations into readable stages');
-check($operator['stages'][2]['evidence'][0]['meaning'] === 'Call route[POLICY]' && $operator['stages'][4]['evidence'][0]['meaning'] === 'Relay request statefully', 'operator stages retain technical evidence beneath primary labels');
+check(in_array('This system appears primarily to act as a SIP routing proxy.', $operator['overview'], true) && in_array('Media-relay processing is present in interpreted call paths.', $operator['overview'], true), 'Discovery operator summary is adapted from evidence-backed System Model roles');
+check(array_column($operator['stages'], 'title') === array_column($presentedRouteReport['system_model']['journeys']['new-call']['stages'], 'label'), 'Discovery overview reuses compressed System Model stages');
+check(($operator['stages'][0]['evidence'][0]['source']['file'] ?? '') !== '' && ($operator['stages'][array_key_last($operator['stages'])]['evidence'][0]['meaning'] ?? '') === 'Relay request statefully', 'System Model stage adapter retains technical evidence beneath primary labels');
 check(array_column($operator['media'], 'meaning') === ['Apply RTPengine answer processing', 'Apply RTPengine offer processing'] && array_column($operator['access'], 'meaning') === [], 'operator media distinguishes interpreted request/reply processing from absent access handling');
 check(in_array('Dynamic route call', array_column($operator['gaps'], 'meaning'), true) && in_array('Custom or uninterpreted statement', array_column($operator['gaps'], 'meaning'), true), 'operator model keeps custom and unresolved flow steps visible');
 removeFixture($interpretationFixture);
@@ -214,8 +218,59 @@ $loadedOnlyMedia = (new AtumKamailioSemantics())->present((new AtumKamailioScann
 check($loadedOnlyMedia['available'] && !$loadedOnlyMedia['used_in_flow'] && $loadedOnlyMedia['stages'] === [], 'loaded-only RTPengine is not represented as active media processing');
 removeFixture($mediaFixture);
 
+$systemModelReport = (new AtumKamailioSemantics())->present((new AtumKamailioScanner())->scan($root . '/utests/fixtures/kam0-system/kamailio.cfg'));
+$systemModel = $systemModelReport['system_model'];
+$secondSystemModel = (new AtumKamailioSemantics())->present((new AtumKamailioScanner())->scan($root . '/utests/fixtures/kam0-system/kamailio.cfg'))['system_model'];
+$journeys = $systemModel['journeys'];
+$mapLabels = array_column($systemModel['map']['objects'], 'label');
+$primaryLabels = array_merge(
+    [$systemModel['server']['primary_role']],
+    $mapLabels,
+    array_column($journeys, 'label'),
+    ...array_values(array_map(static fn(array $journey): array => array_column($journey['stages'], 'label'), $journeys))
+);
+check($systemModel === $secondSystemModel && $systemModel['schema_version'] === 1, 'System Model output is deterministic and versioned');
+check($systemModel['server']['primary_role'] === 'SIP routing proxy' && array_column($systemModel['server']['roles'], 'key') === ['routing-proxy', 'dispatcher', 'media-proxy'], 'System Model infers evidence-backed server roles without claiming an SBC role');
+check(count($systemModel['interfaces']) === 1 && $systemModel['interfaces'][0]['transport'] === 'UDP' && $systemModel['interfaces'][0]['address'] === '198.51.100.20' && $systemModel['interfaces'][0]['port'] === 5060 && $systemModel['interfaces'][0]['scope'] === 'non-loopback', 'System Model describes where SIP signalling enters');
+check(array_column($journeys['new-call']['stages'], 'label') === ['Initial checks', 'Keep this server in the signalling path', 'Routing policy', 'Custom processing', 'Select destination', 'Prepare media', 'Forward call'] && count($journeys['new-call']['stages'][0]['evidence']) === 2, 'new-call journey aggregates low-level operations into system stages while preserving custom processing');
+check(array_column($journeys['existing-call']['stages'], 'label') === ['Existing-call handling', 'Media handling', 'Forward request'], 'existing-dialog evidence produces an existing-call journey');
+check(array_column($journeys['bye']['stages'], 'label') === ['Termination processing', 'Remove media session', 'Forward request'] && $journeys['bye']['outcome']['key'] === 'forward', 'BYE evidence produces a call-termination journey with its actual outcome');
+check(array_column($journeys['cancel']['stages'], 'label') === ['Cancellation handling', 'Media cleanup', 'Forward request'] && $journeys['cancel']['outcome']['key'] === 'forward', 'CANCEL evidence produces a distinct cancellation journey with its actual outcome');
+check(!isset($journeys['register']) && !$systemModel['access']['registration']['identified'] && $systemModel['access']['registration']['summary'] === 'Local endpoint registration handling was not identified in the interpreted configuration.' && !$systemModel['access']['authentication']['identified'], 'registration and authentication absence is conservative and no fake REGISTER journey is created');
+check($systemModel['destinations'][0]['mechanism'] === 'dispatcher' && $systemModel['destinations'][0]['backing_source'] === 'database' && !$systemModel['destinations'][0]['target_known'] && $systemModel['destinations'][0]['summary'] === 'A backend is selected using an external database; destination records were not read.', 'backend selection distinguishes an external backing mechanism from an unknown final destination');
+$mediaRelationships = array_column($systemModel['media']['relationships'], null, 'key');
+check($systemModel['media']['used'] && $systemModel['media']['label'] === 'RTPengine media relay' && in_array('When BYE is processed', $mediaRelationships['cleanup']['triggers'], true) && in_array('When CANCEL is processed', $mediaRelationships['cleanup']['triggers'], true), 'System Model relates media relay to setup, reply, existing-call and proven cleanup journeys');
+check(count($systemModel['custom_components']) === 1 && $systemModel['custom_components'][0]['label'] === 'Custom routing component' && $systemModel['custom_components'][0]['areas'] === ['Routing', 'Media and NAT'] && $systemModel['custom_components'][0]['custom_decisions'] === 1, 'included custom configuration remains a visible system object based on interpreted contents');
+check(in_array('One custom system-level routing decision remains only partially understood.', $systemModel['gaps'], true) && !str_contains(implode(' ', $systemModel['gaps']), 'low-level processing statements'), 'understanding reports system-level gaps instead of overwhelming raw statement counts');
+check(in_array('Backend selection', $mapLabels, true) && in_array('Media relay', $mapLabels, true) && in_array('Custom routing component', $mapLabels, true) && count($systemModel['map']['relationships']) >= 6, 'System Map objects and connections derive from the shared model');
+check(!preg_match('/request_route|route\[|onreply_route|failure_route|t_relay|t_on_reply|rtpengine_manage|rtpengine_delete|ds_select_dst|has_totag|\$ru|\$du/i', implode(' ', $primaryLabels)), 'primary System Map and Call Handling labels require no Kamailio syntax knowledge');
+check(!str_contains((string) json_encode($systemModelReport, JSON_UNESCAPED_SLASHES), 'fixture-password') && !str_contains((string) json_encode($systemModelReport, JSON_UNESCAPED_SLASHES), 'fixture flags must remain redacted'), 'System Model preserves scanner credential and route-argument redaction');
+$knownDestinationProvider = new class implements AtumSystemModelProvider {
+    public function provide(array $discovery): array
+    {
+        return ['destinations' => [[
+            'id' => 'known-upstream',
+            'label' => 'Known upstream',
+            'mechanism' => 'static',
+            'knowledge' => 'known',
+            'target_known' => true,
+            'backing_source' => 'read-only fixture provider',
+            'summary' => 'A specific upstream SIP destination is known.',
+            'evidence' => [['kind' => 'backing-data', 'source' => ['provider' => 'fixture']]],
+        ]]];
+    }
+};
+$providerModel = (new AtumKamailioSystemModel([$knownDestinationProvider]))->build($systemModelReport);
+check($providerModel['basis']['backing_data_evidence'] && in_array(true, array_column($providerModel['destinations'], 'target_known'), true) && in_array('Known upstream', array_column($providerModel['map']['objects'], 'label'), true), 'read-only providers can add known backing-data objects without replacing static discovery');
+
+$registerFixture = sys_get_temp_dir() . '/atum-register-model-' . bin2hex(random_bytes(5)); mkdir($registerFixture, 0700);
+file_put_contents($registerFixture . '/kamailio.cfg', "listen=udp:127.0.0.1:5060\nloadmodule \"registrar.so\"\nloadmodule \"usrloc.so\"\nloadmodule \"auth.so\"\nrequest_route {\nif (is_method(\"REGISTER\")) {\nwww_authorize(\"fixture.invalid\", \"subscriber\");\nsave(\"location\");\nsend_reply(200, \"accepted\");\n}\n}\n");
+$registerModel = (new AtumKamailioSemantics())->present((new AtumKamailioScanner())->scan($registerFixture . '/kamailio.cfg'))['system_model'];
+check(isset($registerModel['journeys']['register']) && array_column($registerModel['journeys']['register']['stages'], 'label') === ['Authenticate endpoint', 'Save endpoint contact', 'Send SIP response'] && $registerModel['access']['registration']['identified'] && $registerModel['access']['authentication']['identified'], 'REGISTER journey appears only when authentication and contact handling are positively recognised');
+removeFixture($registerFixture);
+
 if (!extension_loaded('pdo_sqlite')) { fwrite(STDERR, "FAIL  pdo_sqlite is mandatory; security tests cannot be skipped\n"); exit(1); }
-$state = sys_get_temp_dir() . '/atum-state-' . bin2hex(random_bytes(5)); mkdir($state, 0700); putenv('ATUM_STATE_DIR=' . $state); putenv('KAMAILIO_CONFIG=' . $root . '/examples/kamailio.cfg');
+$state = sys_get_temp_dir() . '/atum-state-' . bin2hex(random_bytes(5)); mkdir($state, 0700); putenv('ATUM_STATE_DIR=' . $state); putenv('KAMAILIO_CONFIG=' . $root . '/utests/fixtures/kam0-system/kamailio.cfg');
 require_once $root . '/admin/bootstrap.php'; $atum = Atum::create(); $atum->Modules->installBundled(true);
 $admin1 = $atum->Auth->createUser('admin-one', 'Correct horse battery 123', 'admin');
 $admin2 = $atum->Auth->createUser('admin-two', 'Correct horse battery 456', 'admin');
@@ -227,7 +282,15 @@ check($blocked && $atum->Auth->adminCount() === 1, 'immediate transaction preser
 $before = (int) $atum->State->db()->query("SELECT session_version FROM users WHERE id=$viewer")->fetchColumn(); $atum->Auth->changePassword($viewer, 'Changed viewer password 123'); $after = (int) $atum->State->db()->query("SELECT session_version FROM users WHERE id=$viewer")->fetchColumn();
 check($after === $before + 1, 'password changes invalidate existing session versions');
 $permissions = $atum->State->db()->query("SELECT permission FROM role_permissions WHERE role='viewer' ORDER BY permission")->fetchAll(PDO::FETCH_COLUMN);
-check(in_array('dashboard.view', $permissions, true) && in_array('discovery.view', $permissions, true) && !in_array('admin', $permissions, true), 'module permissions register as explicit least-privilege grants');
+check(in_array('dashboard.view', $permissions, true) && in_array('discovery.view', $permissions, true) && in_array('systemmap.view', $permissions, true) && in_array('callhandling.view', $permissions, true) && !in_array('admin', $permissions, true), 'operator modules register explicit least-privilege viewer permissions');
+if (!defined('ATUM_IS_AUTH')) { define('ATUM_IS_AUTH', true); }
+$systemMapHtml = $atum->Systemmap->showPage();
+$callHandlingHtml = $atum->Callhandling->showPage();
+check(str_contains($systemMapHtml, 'SIP routing proxy') && str_contains($systemMapHtml, 'SIP signalling') && str_contains($systemMapHtml, 'Media relay') && str_contains($systemMapHtml, 'Backend selection') && str_contains($systemMapHtml, 'Custom routing component'), 'System Map renders the realistic fixture as connected operator-language system objects');
+check(str_contains($systemMapHtml, 'map-relationships') && str_contains($systemMapHtml, 'View Discovery evidence') && !str_contains($systemMapHtml, 'flow-route'), 'System Map renders relationships and an evidence path without embedding the processing trace');
+check(str_contains($callHandlingHtml, 'New calls') && str_contains($callHandlingHtml, 'Requests within an existing call') && str_contains($callHandlingHtml, 'Call termination') && str_contains($callHandlingHtml, 'Cancelled calls'), 'Call Handling renders all four evidence-backed realistic-fixture journeys');
+check(str_contains($callHandlingHtml, 'Initial checks') && str_contains($callHandlingHtml, 'Select destination') && str_contains($callHandlingHtml, 'Remove media session') && str_contains($callHandlingHtml, 'Media cleanup') && str_contains($callHandlingHtml, 'Forward call'), 'Call Handling renders compressed stages and outcomes rather than one row per operation');
+check(!preg_match('/request_route|route\[|onreply_route|failure_route|t_relay|t_on_reply|rtpengine_manage|rtpengine_delete|ds_select_dst|has_totag|\$ru|\$du/i', $systemMapHtml . $callHandlingHtml), 'rendered primary operator modules contain no raw Kamailio route or function vocabulary');
 $atum->Audit->log('test.secret', 'failure', 'test', '1', 'mysql://user:secret@host/db'); $detail = (string) $atum->State->db()->query("SELECT detail FROM audit_log WHERE action='test.secret' ORDER BY id DESC LIMIT 1")->fetchColumn();
 check($detail === 'event=detail_redacted', 'audit destination rejects secret-bearing arbitrary detail');
 check(AtumView::escape('<script>alert(1)</script>') === '&lt;script&gt;alert(1)&lt;/script&gt;', 'view escaping neutralises HTML');
@@ -249,6 +312,7 @@ check($rejected, 'manifest parser rejects ambiguous duplicate identity fields');
 
 $listed = array_filter(file($root . '/install-files.txt', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES)); $missing = array_filter($listed, static fn($file) => !is_file($root . '/' . $file));
 check($missing === [], 'explicit install manifest names only present regular files');
+check(in_array('admin/libraries/Atum/Kamailio/SystemModel.class.php', $listed, true) && in_array('admin/modules/systemmap/views/default.php', $listed, true) && in_array('admin/modules/callhandling/views/default.php', $listed, true), 'explicit install manifest includes the shared model and operator modules');
 check(!in_array('utests/run.php', $listed, true) && !in_array('.env', $listed, true), 'explicit install manifest excludes tests and arbitrary checkout files');
 
 removeFixture($state);
