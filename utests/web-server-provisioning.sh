@@ -7,6 +7,18 @@ TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/atum-web-provisioning.XXXXXX")
 cleanup() { rm -rf "$TEST_ROOT"; }
 trap cleanup EXIT HUP INT TERM
 
+# Keep fixture command discovery independent of optional software installed on
+# the host. In particular, a real runner nginx/apache2/httpd must not turn a
+# mocked "no existing web server" case into an ambiguous-host pre-flight.
+SUPPORT_BIN="$TEST_ROOT/support-bin"
+mkdir -p "$SUPPORT_BIN"
+for utility in awk cat chmod comm date dirname env find flock head hostname ln \
+    mkdir mktemp mv od readlink rm rmdir sed sha256sum sleep sort stat tr uname wc; do
+    utility_path=$(command -v "$utility")
+    [ -x "$utility_path" ] || { echo "required test utility is missing: $utility" >&2; exit 1; }
+    ln -s "$utility_path" "$SUPPORT_BIN/$utility"
+done
+
 make_case() {
     name=$1
     server=$2
@@ -115,7 +127,7 @@ EOF
 run_install() {
     case_root=$1
     shift
-    PATH="$case_root/bin:$PATH" \
+    PATH="$case_root/bin:$SUPPORT_BIN" \
         ATUM_PREFIX="$case_root/application" ATUM_STATE_DIR="$case_root/state" ATUM_CONFIG_DIR="$case_root/config" ATUM_TRANSACTION_DIR="$case_root/transaction" ATUM_LIFECYCLE_LOCK_PATH="$case_root/lock" \
         ATUM_NGINX_CONFIG_DIR="$case_root/nginx" ATUM_APACHE_CONFIG_DIR="$case_root/apache/sites-available" ATUM_APACHE_ENABLED_DIR="$case_root/apache/sites-enabled" ATUM_FPM_POOL_DIR="$case_root/fpm" ATUM_FPM_SOCKET="$case_root/run/atum.sock" \
         ATUM_NGINX_DEFAULT_SITE="$case_root/nginx/sites-enabled/default" ATUM_APACHE_DEFAULT_SITE="$case_root/apache/sites-enabled/000-default.conf" \
