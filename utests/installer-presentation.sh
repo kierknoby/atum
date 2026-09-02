@@ -43,6 +43,23 @@ expect_url 'https://<server-address>:8443/' \
 expect_url 'https://<server-address>:9443/' \
     :: 9443 '10.0.0.10 2001:db8::10 2001:db8::20' ''
 
+# Every package-progress detail uses one shared, exact six-space column.
+{
+    atum_progress_detail 'Installing required packages...'
+    atum_progress_detail 'Working... 10s'
+    atum_progress_detail 'Working... 20s'
+    atum_progress_detail 'Required packages installed (41s)'
+    atum_progress_detail 'done'
+} > "$TEST_ROOT/detail-column.out"
+cat > "$TEST_ROOT/detail-column.expected" <<'EOF'
+      Installing required packages...
+      Working... 10s
+      Working... 20s
+      Required packages installed (41s)
+      done
+EOF
+cmp -s "$TEST_ROOT/detail-column.expected" "$TEST_ROOT/detail-column.out"
+
 run_progress_checked() {
     expected_status=$1
     progress_output=$2

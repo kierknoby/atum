@@ -1,0 +1,120 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+atum_bootstrap() {
+    set -eu
+
+    ATUM_SOURCE_URL='https://github.com/kierknoby/atum.git'
+    ASSUME_YES=0
+    NO_DEPS=0
+    CHECKOUT_ROOT=
+
+    say() { printf '%s\n' "$*"; }
+    fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+    cleanup() {
+        status=$?
+        trap - EXIT
+        if [ -n "$CHECKOUT_ROOT" ]; then
+            case "$CHECKOUT_ROOT" in
+                "${TMPDIR:-/tmp}"/atum-bootstrap.*) rm -rf -- "$CHECKOUT_ROOT" ;;
+                *) printf 'ERROR: Refusing to clean unexpected bootstrap path: %s\n' "$CHECKOUT_ROOT" >&2 ;;
+            esac
+        fi
+        exit "$status"
+    }
+    trap cleanup EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+
+    for argument in "$@"; do
+        case "$argument" in
+            --yes|-y) ASSUME_YES=1 ;;
+            --no-deps) NO_DEPS=1 ;;
+        esac
+    done
+
+    [ "$(id -u)" -eq 0 ] || fail "Atum bootstrap must run as root. Download it first, then run it with sudo."
+
+    confirm_git_install() {
+        if [ "$ASSUME_YES" -eq 1 ]; then
+            say "Install Git? yes (--yes)"
+            return 0
+        fi
+        [ -r /dev/tty ] || fail "Git is missing and installation needs confirmation; rerun the bootstrap with --yes."
+        printf 'Install Git from the native operating-system repository? [y/N] ' > /dev/tty
+        read answer < /dev/tty || fail "Git installation confirmation was aborted."
+        case "$answer" in
+            y|Y|yes|YES|Yes) return 0 ;;
+            *) fail "Git is required to obtain the Atum source tree." ;;
+        esac
+    }
+
+    install_git() {
+        [ "$NO_DEPS" -eq 0 ] || fail "Git is required but --no-deps forbids installing it. Install Git and rerun the bootstrap."
+        package_manager=
+        for candidate in apt-get dnf yum; do
+            if command -v "$candidate" >/dev/null 2>&1; then
+                package_manager=$candidate
+                break
+            fi
+        done
+        [ -n "$package_manager" ] || fail "Git is missing and no supported native package manager (APT, DNF or YUM) was found."
+        say "Git is required to download Atum."
+        say "Native package manager: $package_manager"
+        confirm_git_install
+        case "$package_manager" in
+            apt-get)
+                DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git \
+                    || fail "The native package manager could not install Git."
+                ;;
+            dnf|yum)
+                "$package_manager" install -y git \
+                    || fail "The native package manager could not install Git."
+                ;;
+        esac
+        command -v git >/dev/null 2>&1 || fail "Git installation completed without providing a usable git command."
+    }
+
+    command -v git >/dev/null 2>&1 || install_git
+
+    umask 077
+    CHECKOUT_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/atum-bootstrap.XXXXXX") \
+        || fail "Unable to create a temporary bootstrap directory."
+    SOURCE_DIR="$CHECKOUT_ROOT/source"
+
+    say "Downloading a clean Atum source checkout..."
+    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+        git -c core.hooksPath=/dev/null clone --depth 1 "$ATUM_SOURCE_URL" "$SOURCE_DIR" \
+        || fail "Unable to clone the Atum source repository. No installer was run."
+
+    COMMIT=$(GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+        git -C "$SOURCE_DIR" rev-parse --verify 'HEAD^{commit}') \
+        || fail "Unable to identify the fetched Atum commit. No installer was run."
+    case "$COMMIT" in
+        *[!0-9a-fA-F]*|'') fail "The fetched checkout returned an invalid Git commit identifier. No installer was run." ;;
+    esac
+    [ "${#COMMIT}" -eq 40 ] || fail "The fetched checkout returned an invalid Git commit identifier. No installer was run."
+    [ -f "$SOURCE_DIR/install" ] && [ ! -L "$SOURCE_DIR/install" ] && [ -x "$SOURCE_DIR/install" ] \
+        || fail "The fetched commit does not contain an executable regular Atum installer."
+    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+        git -C "$SOURCE_DIR" diff --quiet --exit-code "$COMMIT" -- install \
+        || fail "The fetched installer does not match the displayed Git commit."
+    CHECKOUT_STATE=$(GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+        git -C "$SOURCE_DIR" status --porcelain --untracked-files=all) \
+        || fail "Unable to verify the fetched checkout state. No installer was run."
+    [ -z "$CHECKOUT_STATE" ] \
+        || fail "The fetched checkout changed before execution. No installer was run."
+
+    say "Atum source: $ATUM_SOURCE_URL"
+    say "Commit: $COMMIT"
+    say ""
+
+    if "$SOURCE_DIR/install" --development --remote "$@"; then
+        exit 0
+    else
+        exit $?
+    fi
+}
+
+atum_bootstrap "$@"

@@ -94,7 +94,7 @@ atum_progress_heartbeat() {
         heartbeat_now=$(date +%s)
         heartbeat_elapsed=$((heartbeat_now - heartbeat_started))
         if [ "$heartbeat_elapsed" -ge $((heartbeat_last_report + heartbeat_interval)) ]; then
-            printf '      Working... %ss\n' "$heartbeat_elapsed"
+            atum_progress_detail "Working... ${heartbeat_elapsed}s"
             heartbeat_last_report=$heartbeat_elapsed
         fi
     done
@@ -106,6 +106,10 @@ atum_progress_stop_heartbeat() {
         wait "$progress_heartbeat_pid" 2>/dev/null || true
         progress_heartbeat_pid=
     fi
+}
+
+atum_progress_detail() {
+    printf '      %s\n' "$1"
 }
 
 atum_run_quiet_with_progress() {
@@ -127,7 +131,7 @@ atum_run_quiet_with_progress() {
     trap 'atum_progress_signal 143' TERM
 
     progress_started=$(date +%s)
-    printf '      %s...\n' "$progress_label"
+    atum_progress_detail "$progress_label..."
     atum_progress_heartbeat "$progress_started" "$progress_interval" &
     progress_heartbeat_pid=$!
 
@@ -143,9 +147,9 @@ atum_run_quiet_with_progress() {
     progress_elapsed=$((progress_finished - progress_started))
     if [ "$progress_status" -eq 0 ]; then
         if [ "$progress_elapsed" -gt 0 ]; then
-            printf '      Required packages installed (%ss)\n' "$progress_elapsed"
+            atum_progress_detail "Required packages installed (${progress_elapsed}s)"
         else
-            printf '      Required packages installed\n'
+            atum_progress_detail 'Required packages installed'
         fi
     fi
     return "$progress_status"

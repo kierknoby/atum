@@ -9,6 +9,7 @@ Atum v0.1 is an early development project. Contributions should preserve the exi
 Run before submitting a change:
 
 ```sh
+sh -n bootstrap
 sh -n install
 sh -n uninstall
 find . -type f -name '*.php' -print0 | xargs -0 -n1 php -l
@@ -16,6 +17,7 @@ php utests/run.php
 php utests/remote-deployment.php
 sh utests/installer-preflight.sh
 sh utests/installer-presentation.sh
+sh utests/bootstrap.sh
 sudo env "PATH=$PATH" sh utests/web-server-provisioning.sh
 sh utests/installer-credentials.sh
 sh utests/http.sh

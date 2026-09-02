@@ -26,7 +26,7 @@ jobs:
         with:
           node-version: '22'
       - run: composer validate --no-check-publish --strict
-      - run: sh -n install && sh -n uninstall
+      - run: sh -n bootstrap && sh -n install && sh -n uninstall
       - run: find . -type f -name '*.php' -print0 | xargs -0 -n1 php -l
       - run: find admin/modules -type f -name '*.js' -print0 | xargs -0 -n1 node --check
       - name: Require PDO SQLite
@@ -36,6 +36,7 @@ jobs:
       - run: php utests/remote-deployment.php
       - run: sh utests/installer-preflight.sh
       - run: sh utests/installer-presentation.sh
+      - run: sh utests/bootstrap.sh
       - run: sudo env "PATH=$PATH" sh utests/web-server-provisioning.sh
       - if: ${{ matrix.php == '8.3' }}
         run: sudo apt-get update && sudo apt-get install -y libio-pty-perl
@@ -56,7 +57,7 @@ jobs:
           php-version: '8.3'
           extensions: pdo_sqlite, openssl
           coverage: none
-      - run: sh -n install && sh -n uninstall
+      - run: sh -n bootstrap && sh -n install && sh -n uninstall
       - run: find . -type f -name '*.php' -print0 | xargs -0 -n1 php -l
       - name: Require PDO SQLite
         run: >-

@@ -45,7 +45,10 @@ Atum requires:
 - root access for system installation and removal;
 - a separate test or non-production host.
 
-Installing from GitHub also requires Git. Check for it with:
+The recommended GitHub command uses `curl` to download the small bootstrap file.
+The bootstrap then installs Git from the host's supported native package manager
+when Git is missing, after confirmation. To manage Git yourself, check for it
+with:
 
 ```sh
 git --version
@@ -70,20 +73,57 @@ Atum does not install Kamailio or add third-party package repositories. In remot
 ### Option 1: Install from GitHub
 
 ```sh
-cd ~
-git clone https://github.com/kierknoby/atum.git
-cd atum
-sudo ./install --check --remote
-sudo ./install --development --remote
+curl -fsSL https://raw.githubusercontent.com/kierknoby/atum/main/bootstrap | sudo sh
 ```
 
-`sudo ./install --check --remote` is the detailed engineering view: it reports the operating system, package/service managers, runtime, web server, Kamailio configuration, paths, bind address and missing requirements. It does not require `--development` and makes no changes. `sudo ./install --development --remote` uses a shorter operator-facing summary and staged progress while performing the installation.
+The bootstrap downloads a clean temporary checkout, prints the exact Git commit
+being installed, and invokes the existing installer once with
+`--development --remote`. It removes the checkout on success, failure or an
+interrupt. Pass additional installer arguments through `sh -s --`; for example:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/kierknoby/atum/main/bootstrap | sudo sh -s -- --verbose
+```
+
+`--yes`, `--verbose`, `--check`, `--no-deps` and other installer arguments are
+forwarded unchanged. `--check` reaches the normal installer pre-flight and makes
+no Atum changes.
+
+If Git is missing, the bootstrap can install it through APT, DNF or YUM. It asks
+first unless `--yes` was supplied, and refuses when `--no-deps` was supplied.
+This acquisition happens before Atum's installation ledger exists, so Git is a
+retained administrator prerequisite and is not removed by `atum-uninstall`.
+The bootstrap never adds repositories, changes firewall rules or duplicates any
+installer lifecycle operation.
+
+All side-effectful bootstrap logic is inside one shell function, with its sole
+invocation on the final line. A stream truncated before that invocation can at
+most define part or all of the function; it cannot install a package, create a
+checkout or invoke Atum. To audit the complete file before running anything as
+root, use this more conservative alternative:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/kierknoby/atum/main/bootstrap -o atum-bootstrap
+less atum-bootstrap
+sudo sh ./atum-bootstrap --check
+rm -f ./atum-bootstrap
+```
+
+HTTPS protects the download in transit, but the GitHub `main` URL is mutable. The
+bootstrap is not signed or cryptographically pinned, and this is not a signed
+release mechanism. It makes the selected source revision visible by printing its
+full commit identifier before execution.
+
+The detailed engineering view reports the operating system, package/service
+managers, runtime, web server, Kamailio configuration, paths, bind address and
+missing requirements. A normal installation uses a shorter operator-facing
+summary and staged progress while performing the installation.
 
 Use `--yes` for deterministic non-interactive package approval. Add `--verbose` when diagnosing an install to retain the detailed pre-flight view and stream the underlying package-manager and remote validation/service output:
 
 ```sh
-sudo ./install --development --remote --yes
-sudo ./install --development --remote --verbose
+curl -fsSL https://raw.githubusercontent.com/kierknoby/atum/main/bootstrap | sudo sh -s -- --yes
+curl -fsSL https://raw.githubusercontent.com/kierknoby/atum/main/bootstrap | sudo sh -s -- --verbose
 ```
 
 A normal remote run is deliberately concise and follows completed installer boundaries rather than percentages or animation:
@@ -102,7 +142,10 @@ Preparing remote Atum installation
 [1/6] Checking host
       done
 [2/6] Installing system dependencies
-...
+      Installing required packages...
+      Working... 10s
+      Required packages installed (12s)
+      done
 [6/6] Creating initial administrator
 
 Username [admin]:
@@ -116,7 +159,22 @@ While normal-mode package installation is quiet, Atum prints an elapsed-time `Wo
 
 The checkout is only the installation source. The installer does not modify it and copies only files listed in `install-files.txt`. Git metadata, tests, untracked files and other checkout content are not installed.
 
-### Option 2: Install from a local copy
+### Option 2: Manual Git checkout
+
+Keep a source checkout when developing or when you want to choose and inspect a
+revision with Git yourself:
+
+```sh
+cd ~
+git clone https://github.com/kierknoby/atum.git
+cd atum
+sudo ./install --check --remote
+sudo ./install --development --remote
+```
+
+The checkout remains in place and is not managed by Atum.
+
+### Option 3: Install from a local copy
 
 From the root of an existing Atum source copy, run:
 
@@ -436,6 +494,7 @@ php utests/run.php
 php utests/remote-deployment.php
 sh utests/installer-preflight.sh
 sh utests/installer-presentation.sh
+sh utests/bootstrap.sh
 sudo env "PATH=$PATH" sh utests/web-server-provisioning.sh
 sh utests/installer-credentials.sh
 sh utests/http.sh
