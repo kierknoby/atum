@@ -8,6 +8,7 @@ function check(bool $ok, string $message): void { global $failures; echo ($ok ? 
 function removeFixture(string $path): void { if (!is_dir($path)) { return; } $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($path, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::CHILD_FIRST); foreach ($it as $item) { $item->isDir() && !$item->isLink() ? rmdir($item->getPathname()) : unlink($item->getPathname()); } rmdir($path); }
 
 require_once $root . '/admin/libraries/Atum/Kamailio/Scanner.class.php';
+require_once $root . '/admin/libraries/Atum/Kamailio/Semantics.class.php';
 $fixture = sys_get_temp_dir() . '/atum-scanner-' . bin2hex(random_bytes(5)); mkdir($fixture, 0700);
 file_put_contents($fixture . '/included.cfg', "loadmodule 'dispatcher.so'\nroute[FROM_INCLUDE] { return; }\n");
 file_put_contents($fixture . '/root.cfg', <<<'CFG'
@@ -18,6 +19,9 @@ include_file DYNAMIC_INCLUDE
 loadmodule "db_mysql.so"
 #!endif
 loadmodule "sl.so"
+loadmodule "vendor_custom.so"
+loadmodule "tm.so"
+loadmodule "sanity.so"
 modparam("sl", "debug", 1)
 modparam("sl", "auth_key", "non-obvious-secret")
 modparam("sl",
@@ -38,6 +42,25 @@ check(in_array('conditional', array_column(array_column($report['modules'], 'sou
 check(!str_contains((string) $json, 'must-not-escape') && !str_contains((string) $json, 'non-obvious-secret') && !str_contains((string) $json, 'unquoted-secret-material') && !str_contains((string) $json, '4321') && !str_contains((string) $json, 'password'), 'scanner fails closed for obvious, bespoke and unquoted secrets');
 check(str_contains((string) $json, '"debug","value":"1"'), 'scanner retains positively classified safe values');
 check(in_array('mysql', $report['database_schemes'], true), 'scanner reports a database scheme without credentials');
+
+$presented = (new AtumKamailioSemantics())->present($report);
+$modulePresentation = $presented['presentation']['modules'];
+$presentedModules = [];
+foreach ($modulePresentation['groups'] as $group) {
+    foreach ($group['modules'] as $module) { $presentedModules[$module['name']] = $module; }
+}
+$capabilityLabels = array_column($modulePresentation['capabilities'], 'label');
+check($modulePresentation['coverage'] === ['total' => 6, 'recognised' => 5, 'unclassified' => 1], 'module presentation reports recognised and unclassified coverage');
+check($presentedModules['tm']['purpose'] === 'Stateful SIP transaction management' && $presentedModules['tm']['semantic_status'] === 'recognised', 'recognised modules receive concise purpose metadata');
+check($presentedModules['vendor_custom']['semantic_status'] === 'unclassified' && $presentedModules['vendor_custom']['group_label'] === 'Other / unclassified', 'unknown modules remain visible without guessed classification');
+check(array_column($modulePresentation['groups'], 'label') === ['Core SIP processing', 'Transactions and routing', 'Dispatching and load balancing', 'Database and storage', 'Other / unclassified'], 'module groups use deterministic taxonomy order');
+check(array_column($modulePresentation['groups'][0]['modules'], 'name') === ['sanity', 'sl'], 'modules are ordered deterministically within functional groups');
+check(in_array('Transaction handling', $capabilityLabels, true) && in_array('Dispatcher and load-balancing support', $capabilityLabels, true), 'confident recognised modules produce loaded-capability summaries');
+check(!in_array('MySQL/MariaDB module support', $capabilityLabels, true) && !str_contains(implode(' ', $capabilityLabels), 'vendor_custom'), 'conditional and unknown modules do not produce false capability inference');
+$rawSl = $report['modules'][array_search('sl', array_column($report['modules'], 'name'), true)];
+check($presentedModules['sl']['source'] === $rawSl['source'] && $presentedModules['sl']['params'][0]['source'] === $rawSl['params'][0]['source'], 'module and parameter provenance survive semantic presentation');
+check(count($presentedModules['sl']['params']) === 3 && $presentedModules['tm']['params'] === [], 'modules with and without discovered parameters are preserved');
+check(AtumKamailioSemantics::recognisedModuleNames() === array_values(array_unique(AtumKamailioSemantics::recognisedModuleNames())), 'recognised module catalogue is deterministic and unique');
 removeFixture($fixture);
 
 if (!extension_loaded('pdo_sqlite')) { fwrite(STDERR, "FAIL  pdo_sqlite is mandatory; security tests cannot be skipped\n"); exit(1); }

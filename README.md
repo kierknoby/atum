@@ -71,11 +71,34 @@ Atum does not install Kamailio or add third-party package repositories. In remot
 
 **Do not run the v0.1 installer on a production Kamailio system.**
 
-### Option 1: Install from GitHub
+### Quick start
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/kierknoby/atum/main/bootstrap | sudo sh
-```
+1. **Install Atum.**
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/kierknoby/atum/main/bootstrap | sudo sh
+   ```
+
+2. **Permit TCP/8443 from the current administrator address.** On a host using UFW that you administer over SSH:
+
+   ```sh
+   ADMIN_IP="${SSH_CLIENT%% *}"
+   sudo ufw allow from "$ADMIN_IP" to any port 8443 proto tcp
+   ```
+
+   `ADMIN_IP` is the source address of the current SSH connection. This UFW plus SSH example is not universal: Atum never modifies firewall rules automatically, and administrators using another host firewall or a cloud/provider firewall must apply an equivalent policy for their trusted administration IP or CIDR.
+
+3. **Open Atum.**
+
+   ```text
+   https://SERVER_IP:8443/
+   ```
+
+   Prefer the exact URL printed by the installer. The self-signed development certificate encrypts traffic, but it does not establish browser trust in the server's identity, so the browser will display a certificate warning.
+
+4. **Sign in** with the administrator account created during installation.
+
+### How the bootstrap works
 
 The bootstrap downloads a clean temporary checkout, prints the exact Git commit
 being installed, and invokes the existing installer once with
@@ -160,7 +183,9 @@ While normal-mode package installation is quiet, Atum prints an elapsed-time `Wo
 
 The checkout is only the installation source. The installer does not modify it and copies only files listed in `install-files.txt`. Git metadata, tests, untracked files and other checkout content are not installed.
 
-### Option 2: Manual Git checkout
+### Manual installation
+
+#### Git checkout
 
 Keep a source checkout when developing or when you want to choose and inspect a
 revision with Git yourself:
@@ -175,7 +200,7 @@ sudo ./install --development --remote
 
 The checkout remains in place and is not managed by Atum.
 
-### Option 3: Install from a local copy
+#### Local copy
 
 From the root of an existing Atum source copy, run:
 
@@ -188,7 +213,7 @@ The second command installs Atum for loopback-only development access. Add `--re
 
 Pre-flight reports the detected operating system, package manager, service manager, web server, PHP version and extensions, Kamailio binary/version/configuration, and database URL schemes found within the statically recognisable literal include/import scope.
 
-### Remote development installation
+### Remote deployment details
 
 Remote installation is for an existing supported Kamailio test host and requires explicit use of `--development`:
 
@@ -207,24 +232,7 @@ https://<server-address>:8443/
 
 IPv6 literals are bracketed correctly. The installer does not use an external address-discovery service and does not claim that a host address is publicly reachable. The browser will warn because the generated development certificate is self-signed.
 
-Allow the selected Atum port in the host firewall and, where applicable, the cloud/provider firewall only from a trusted administration IP or CIDR. Atum does not change firewall rules and does not alter Kamailio merely by being installed.
-
-For example, on a host using UFW that you administer over SSH, permit the default TCP/8443 port only from the source address of the current SSH connection:
-
-```sh
-ADMIN_IP="${SSH_CLIENT%% *}"
-sudo ufw allow from "$ADMIN_IP" to any port 8443 proto tcp
-```
-
-`ADMIN_IP` is the source address of the **current** SSH connection. This is an example for UFW plus SSH, not a universal requirement; administrators using another host firewall or a cloud/provider firewall must apply an equivalent policy themselves. Atum never performs this step automatically.
-
-After installation and the required firewall permission, open:
-
-```text
-https://SERVER_IP:8443/
-```
-
-Use the exact URL printed by the installer when it differs. The self-signed development certificate encrypts traffic, but it does not establish browser trust in the server's identity, so the browser will display a certificate warning.
+Atum does not alter Kamailio merely by being installed.
 
 If both supported web servers are installed, select one explicitly:
 
@@ -234,6 +242,8 @@ sudo ./install --development --remote --web-server=nginx
 ```
 
 Remote mode listens on `0.0.0.0:8443` by default. Use `--listen-address` and `--listen-port` to select another literal address or port.
+
+### Installer options
 
 Available installer options:
 
@@ -251,6 +261,8 @@ Available installer options:
 --listen-port=port          HTTPS port for remote mode (default 8443)
 --web-server=name           select nginx or apache when both are installed
 ```
+
+### Installation behavior and ownership
 
 The installer does not install, replace or reconfigure Kamailio. It does not modify or remove the Git checkout.
 
@@ -279,19 +291,32 @@ Do not use `git pull` in `/usr/share/atum`, copy a new checkout over it, or repl
 
 ## Uninstalling
 
-Preview removal:
+### Normal removal
 
-```sh
-sudo atum-uninstall --check
-```
+1. **Preview removal.**
+
+   ```sh
+   sudo atum-uninstall --check
+   ```
+
+2. **Remove Atum.**
+
+   ```sh
+   sudo atum-uninstall
+   ```
+
+3. **Remove the documented UFW rule, if you created it.**
+
+   ```sh
+   ADMIN_IP="${SSH_CLIENT%% *}"
+   sudo ufw delete allow from "$ADMIN_IP" to any port 8443 proto tcp
+   ```
+
+   This deletes the administrator-created example rule. Atum does not delete it because Atum never created or owned it.
+
+### Removal details
 
 The preview validates the installation ledger and shows the application, configuration and state trees; CLI links; whether the Atum account and group were created by Atum; recorded remote web-server, PHP-FPM and TLS integration; and `Packages added`. Review this plan before removal.
-
-Remove Atum interactively:
-
-```sh
-sudo atum-uninstall
-```
 
 Normal interactive removal asks for confirmation. The uninstaller uses the root-owned installation ledger and matching installation markers; it does not infer ownership from conventional paths.
 
@@ -307,14 +332,7 @@ sudo atum-uninstall --keep-dependencies
 
 Git is retained too. If the bootstrap installed Git because it was not already present, Git remains after Atum is uninstalled because it is an acquisition prerequisite installed before the lifecycle ledger exists, not an Atum runtime dependency owned by that ledger. The uninstaller also does not remove a Git checkout, `.git`, or untracked checkout files.
 
-If you created the earlier UFW example rule, remove it after uninstall with:
-
-```sh
-ADMIN_IP="${SSH_CLIENT%% *}"
-sudo ufw delete allow from "$ADMIN_IP" to any port 8443 proto tcp
-```
-
-This deletes the administrator-created example rule. Atum does not delete it because Atum never created or owned it.
+### Expected post-uninstall state
 
 After a successful normal uninstall:
 

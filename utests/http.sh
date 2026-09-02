@@ -26,6 +26,13 @@ after_session=$(awk '$6=="ATUMSESSID"{print $7}' "$TEST_DIR/cookies")
 curl -fsS -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/index.php" > "$TEST_DIR/page"
 auth_csrf=$(sed -n 's/.*name="csrf" value="\([^"]*\)".*/\1/p' "$TEST_DIR/page" | head -n1)
 [ -n "$auth_csrf" ]
+curl -fsS -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/index.php?display=discovery" > "$TEST_DIR/discovery-page"
+grep -q 'Detected module support' "$TEST_DIR/discovery-page"
+grep -q 'Dispatching and load balancing' "$TEST_DIR/discovery-page"
+grep -q 'Destination selection and load balancing' "$TEST_DIR/discovery-page"
+grep -q 'discovered parameter.*provenance' "$TEST_DIR/discovery-page"
+grep -q '&quot;&lt;redacted-dsn&gt;&quot;' "$TEST_DIR/discovery-page"
+! grep -q 'supersecret' "$TEST_DIR/discovery-page"
 [ "$(curl -sS -o /dev/null -w '%{http_code}' -b "$TEST_DIR/cookies" -X POST "http://127.0.0.1:$PORT/ajax.php?module=userman&command=disable")" = 403 ]
 [ "$(curl -sS -o /dev/null -w '%{http_code}' -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/ajax.php?module=userman&command=disable")" = 405 ]
 [ "$(curl -sS -o /dev/null -w '%{http_code}' -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/ajax.php?module=discovery&command=not-allowed")" = 403 ]

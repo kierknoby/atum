@@ -31,6 +31,7 @@ admin/libraries/Atum/Modules.class.php
 admin/libraries/Atum/Ajax.class.php
 admin/libraries/Atum/System.class.php
 admin/libraries/Atum/Kamailio/Scanner.class.php
+admin/libraries/Atum/Kamailio/Semantics.class.php
 admin/views/layout.php
 admin/views/login.php
 admin/modules/framework/Framework.class.php

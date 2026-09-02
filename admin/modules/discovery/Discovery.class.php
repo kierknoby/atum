@@ -2,13 +2,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 require_once __DIR__ . '/../../libraries/Atum/Kamailio/Scanner.class.php';
+require_once __DIR__ . '/../../libraries/Atum/Kamailio/Semantics.class.php';
 
 class Discovery extends AtumModule
 {
     public function scan(?string $config = null): array
     {
         $config ??= (string) $this->Atum->Config->get('KAMAILIO_CONFIG');
-        return (new AtumKamailioScanner())->scan($config);
+        $report = (new AtumKamailioScanner())->scan($config);
+        return (new AtumKamailioSemantics())->present($report);
     }
 
     public function showPage(): string

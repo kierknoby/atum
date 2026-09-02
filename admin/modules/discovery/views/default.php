@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 if (!defined('ATUM_IS_AUTH')) { die('No direct script access allowed'); }
 $e = [AtumView::class, 'escape'];
+$modulePresentation = $report['presentation']['modules'] ?? ['capabilities' => [], 'coverage' => ['total' => 0, 'recognised' => 0, 'unclassified' => 0], 'groups' => []];
 ?>
 <div class="page-heading">
   <div>
@@ -42,21 +43,92 @@ $e = [AtumView::class, 'escape'];
       </div>
     </section>
 
-    <section class="panel">
-      <div class="panel-heading"><h2>Kamailio Modules</h2></div>
-      <div class="panel-body table-wrap">
-        <table>
-          <thead><tr><th>Module</th><th>Parameters</th><th>Loaded from</th></tr></thead>
-          <tbody>
-          <?php foreach ($report['modules'] as $module): ?>
-            <tr>
-              <td><strong><?= $e($module['name']) ?></strong></td>
-              <td><?= count($module['params']) ?></td>
-              <td><?= $e($module['source']['file']) ?>:<?= (int) $module['source']['line'] ?></td>
-            </tr>
-          <?php endforeach; ?>
-          </tbody>
-        </table>
+    <section class="panel discovery-modules">
+      <div class="panel-heading module-panel-heading">
+        <div>
+          <h2>Loaded Modules</h2>
+          <p>Functional interpretation of modules found in the scanned configuration.</p>
+        </div>
+        <span class="module-coverage"><?= (int) $modulePresentation['coverage']['recognised'] ?> of <?= (int) $modulePresentation['coverage']['total'] ?> recognised</span>
+      </div>
+      <div class="panel-body">
+        <div class="capability-summary">
+          <h3>Detected module support</h3>
+          <?php if ($modulePresentation['capabilities'] !== []): ?>
+            <ul class="capability-list">
+              <?php foreach ($modulePresentation['capabilities'] as $capability): ?>
+                <li>
+                  <span><?= $e($capability['label']) ?></span>
+                  <small><?= $e(implode(', ', $capability['modules'])) ?></small>
+                </li>
+              <?php endforeach; ?>
+            </ul>
+          <?php else: ?>
+            <p class="muted-copy">No capability summary can be asserted from confidently discovered, recognised modules.</p>
+          <?php endif; ?>
+          <p class="module-summary-note">A loaded module makes this support available; it does not by itself prove the capability is actively used.</p>
+          <?php if ($modulePresentation['coverage']['unclassified'] > 0): ?>
+            <p class="module-unknown-note"><strong><?= (int) $modulePresentation['coverage']['unclassified'] ?> discovered module<?= $modulePresentation['coverage']['unclassified'] === 1 ? '' : 's' ?></strong> remain unclassified and are shown below without inferred semantics.</p>
+          <?php endif; ?>
+        </div>
+
+        <?php foreach ($modulePresentation['groups'] as $group): ?>
+          <section class="module-group" aria-labelledby="module-group-<?= $e($group['key']) ?>">
+            <div class="module-group-heading">
+              <h3 id="module-group-<?= $e($group['key']) ?>"><?= $e($group['label']) ?></h3>
+              <span><?= count($group['modules']) ?></span>
+            </div>
+            <div class="module-list">
+              <?php foreach ($group['modules'] as $module): ?>
+                <?php $parameterCount = count($module['params']); ?>
+                <article class="module-card">
+                  <div class="module-card-summary">
+                    <div>
+                      <h4><code><?= $e($module['name']) ?></code></h4>
+                      <p><?= $e($module['purpose']) ?></p>
+                    </div>
+                    <div class="module-statuses">
+                      <span class="semantic-status semantic-status-<?= $e($module['semantic_status']) ?>"><?= $module['semantic_status'] === 'recognised' ? 'Recognised' : 'Unclassified' ?></span>
+                      <?php if (($module['source']['confidence'] ?? '') !== 'syntactic'): ?>
+                        <span class="confidence-status"><?= $e(ucfirst((string) $module['source']['confidence'])) ?> discovery</span>
+                      <?php endif; ?>
+                    </div>
+                  </div>
+                  <details class="module-details">
+                    <summary><?= $parameterCount ?> discovered parameter<?= $parameterCount === 1 ? '' : 's' ?> · provenance</summary>
+                    <dl class="module-provenance">
+                      <dt>Loaded from</dt>
+                      <dd><code><?= $e($module['source']['file']) ?>:<?= (int) $module['source']['line'] ?></code></dd>
+                      <dt>Recognition</dt>
+                      <dd><?= $module['semantic_status'] === 'recognised' ? 'Known module presentation metadata' : 'Discovered name; no semantic metadata' ?></dd>
+                      <dt>Confidence</dt>
+                      <dd><?= $e(ucfirst((string) ($module['source']['confidence'] ?? 'unknown'))) ?> configuration match</dd>
+                    </dl>
+                    <?php if ($module['params'] !== []): ?>
+                      <div class="table-wrap module-parameter-table">
+                        <table>
+                          <thead><tr><th>Parameter</th><th>Discovered value</th><th>Classification</th><th>Source</th></tr></thead>
+                          <tbody>
+                          <?php foreach ($module['params'] as $parameter): ?>
+                            <tr>
+                              <td><code><?= $e($parameter['name']) ?></code></td>
+                              <td><code><?= $e($parameter['value']) ?></code></td>
+                              <td><?= $e($parameter['value_classification']) ?></td>
+                              <td><code><?= $e($parameter['source']['file']) ?>:<?= (int) $parameter['source']['line'] ?></code></td>
+                            </tr>
+                          <?php endforeach; ?>
+                          </tbody>
+                        </table>
+                      </div>
+                    <?php else: ?>
+                      <p class="muted-copy module-no-parameters">No module parameters were discovered in the statically recognised configuration.</p>
+                    <?php endif; ?>
+                  </details>
+                </article>
+              <?php endforeach; ?>
+            </div>
+          </section>
+        <?php endforeach; ?>
       </div>
     </section>
 
