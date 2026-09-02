@@ -151,8 +151,8 @@ grep -q 'NOT SUITABLE FOR PRODUCTION' "$TEST_ROOT/remote-install.out"
 grep -q 'No firewall rules were changed' "$TEST_ROOT/remote-install.out"
 ! grep -q '^Operating system :' "$TEST_ROOT/remote-install.out"
 ! grep -q 'PUBLIC_IP' "$TEST_ROOT/remote-install.out"
-[ "$(grep -c '^Kamailio configuration remains unchanged\.$' "$TEST_ROOT/remote-install.out")" -eq 1 ]
-grep -q '^Initial administrator: testadmin$' "$TEST_ROOT/remote-install.out"
+[ "$(grep -c '^Kamailio:      unchanged$' "$TEST_ROOT/remote-install.out")" -eq 1 ]
+grep -q '^Administrator: testadmin$' "$TEST_ROOT/remote-install.out"
 ! grep -q '^Username \[admin\]:' "$TEST_ROOT/remote-install.out"
 previous_stage=0
 for stage_label in \
@@ -166,8 +166,10 @@ for stage_label in \
     [ -n "$stage_line" ] && [ "$stage_line" -gt "$previous_stage" ]
     previous_stage=$stage_line
 done
-grep -q '^Open:$' "$TEST_ROOT/remote-install.out"
-grep -q '^https://' "$TEST_ROOT/remote-install.out"
+grep -q '^                 ATUM INSTALLATION COMPLETE$' "$TEST_ROOT/remote-install.out"
+grep -q '^OPEN ATUM:$' "$TEST_ROOT/remote-install.out"
+grep -q '^  https://' "$TEST_ROOT/remote-install.out"
+grep -q '^  atum-uninstall --check$' "$TEST_ROOT/remote-install.out"
 grep -q '"remote_development"' "$ATUM_CONFIG_DIR/install-ledger.json"
 [ -f "$ATUM_NGINX_CONFIG_DIR/atum.conf" ] && [ -f "$ATUM_FPM_POOL_DIR/atum.conf" ]
 [ "$(stat -c %a "$ATUM_CONFIG_DIR/tls/development.key")" = 600 ]

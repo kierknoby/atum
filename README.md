@@ -112,6 +112,8 @@ Confirm password:
 
 Detected versions and selected/reused components reflect the actual host. Package decisions are described as capabilities; exact distro package names and underlying command output remain available with `--verbose`. No cursor control or colour support is required.
 
+While normal-mode package installation is quiet, Atum prints an elapsed-time `Working...` heartbeat every ten seconds until the package-manager command finishes. The final output uses a clearly delimited `ATUM INSTALLATION COMPLETE` block containing the administrator name, prominent access URL in remote mode, verified integration summary, warnings and removal-preview command. `--verbose` streams package-manager output directly instead of using the quiet heartbeat.
+
 The checkout is only the installation source. The installer does not modify it and copies only files listed in `install-files.txt`. Git metadata, tests, untracked files and other checkout content are not installed.
 
 ### Option 2: Install from a local copy

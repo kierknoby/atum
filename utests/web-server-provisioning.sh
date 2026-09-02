@@ -141,7 +141,9 @@ grep -q '^Install required packages? yes (--yes)$' "$nginx_case/output"
 ! grep -q 'Install required operating-system package' "$nginx_case/output"
 ! grep -q 'mock package-manager output' "$nginx_case/output"
 ! grep -q 'PUBLIC_IP' "$nginx_case/output"
-[ "$(grep -c '^Kamailio configuration remains unchanged\.$' "$nginx_case/output")" -eq 1 ]
+[ "$(grep -c '^Kamailio:      unchanged$' "$nginx_case/output")" -eq 1 ]
+grep -q '^      Installing required packages\.\.\.$' "$nginx_case/output"
+grep -q '^      Required packages installed' "$nginx_case/output"
 grep -q '^No firewall rules were changed\.' "$nginx_case/output"
 grep -q '^The development certificate is self-signed\.$' "$nginx_case/output"
 stage1=$(grep -n '^\[1/6\] Checking host$' "$nginx_case/output" | cut -d: -f1)
@@ -155,6 +157,7 @@ grep -q '^Atum GUI installation pre-flight$' "$verbose_case/output"
 grep -q '^Operating system :' "$verbose_case/output"
 grep -q '^  Packages: .*nginx' "$verbose_case/output"
 grep -q 'mock package-manager output' "$verbose_case/output"
+! grep -q '^      Installing required packages\.\.\.$' "$verbose_case/output"
 
 package_failure_case=$(make_case package-failure nginx no)
 touch "$package_failure_case/fail-packages"

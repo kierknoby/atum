@@ -4,6 +4,7 @@ set -eu
 
 ATUM_MIN_PHP="8.2.0"
 SOURCE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+ATUM_PRESENTATION_COMMAND=
 . "$SOURCE_DIR/installer/presentation.sh"
 PREFIX="${ATUM_PREFIX:-/usr/share/atum}"
 STATE_DIR="${ATUM_STATE_DIR:-/var/lib/atum}"
@@ -594,11 +595,12 @@ AFTER=$(mktemp)
 ENABLED_BEFORE=$(mktemp)
 ENABLED_AFTER=$(mktemp)
 PACKAGE_OUTPUT=$(mktemp)
+ADMINISTRATOR_OUTPUT=$(mktemp)
 snapshot_enabled_units() { "$SERVICE_COMMAND" list-unit-files --state=enabled --no-legend --no-pager 2>/dev/null | awk '{print $1}' | sort -u; }
 rollback_install() {
     status=$?
     trap - EXIT HUP INT TERM
-    rm -f "$BEFORE" "$AFTER" "$ENABLED_BEFORE" "$ENABLED_AFTER" "$PACKAGE_OUTPUT"
+    rm -f "$BEFORE" "$AFTER" "$ENABLED_BEFORE" "$ENABLED_AFTER" "$PACKAGE_OUTPUT" "$ADMINISTRATOR_OUTPUT"
     if [ "$status" -ne 0 ] && [ "$INSTALL_COMMITTED" -eq 0 ]; then
         remove_package_start_suppression || true
         for record in "$TRANSACTION_DIR"/package-enabled-unit-*; do
@@ -712,7 +714,9 @@ install_packages() {
         apt-get)
             if [ "$VERBOSE" -eq 1 ]; then
                 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@" || { remove_package_start_suppression || true; refresh_packages_added; return 1; }
-            elif ! DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@" > "$PACKAGE_OUTPUT" 2>&1; then
+            elif ! ATUM_PRESENTATION_COMMAND=run-quiet "$SOURCE_DIR/installer/presentation.sh" \
+                "$PACKAGE_OUTPUT" "Installing required packages" -- \
+                env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@"; then
                 say "Package installation failed; package-manager output follows:" >&2
                 cat "$PACKAGE_OUTPUT" >&2
                 remove_package_start_suppression || true
@@ -723,7 +727,9 @@ install_packages() {
         dnf|yum)
             if [ "$VERBOSE" -eq 1 ]; then
                 "$PKG_MANAGER" install -y "$@" || { remove_package_start_suppression || true; refresh_packages_added; return 1; }
-            elif ! "$PKG_MANAGER" install -y "$@" > "$PACKAGE_OUTPUT" 2>&1; then
+            elif ! ATUM_PRESENTATION_COMMAND=run-quiet "$SOURCE_DIR/installer/presentation.sh" \
+                "$PACKAGE_OUTPUT" "Installing required packages" -- \
+                "$PKG_MANAGER" install -y "$@"; then
                 say "Package installation failed; package-manager output follows:" >&2
                 cat "$PACKAGE_OUTPUT" >&2
                 remove_package_start_suppression || true
@@ -829,6 +835,7 @@ USER_CREATED=1
 journal_put user-created 1
 stage_done
 
+exec 7> "$ADMINISTRATOR_OUTPUT"
 ATUM_INSTALL_BOOTSTRAPPED=1 php "$SOURCE_DIR/install.php" \
     --prefix="$PREFIX" \
     --state-dir="$STATE_DIR" \
@@ -859,35 +866,23 @@ ATUM_INSTALL_BOOTSTRAPPED=1 php "$SOURCE_DIR/install.php" \
     --start-fpm-service="$([ "$FPM_WAS_PRESENT" -eq 0 ] && printf '%s' 1 || printf '%s' 0)" \
     --progress=1 \
     --verbose="$VERBOSE" \
+    --administrator-output-fd=7 \
     --service-command="$SERVICE_COMMAND" \
     --openssl="$(command -v openssl 2>/dev/null || true)"
+exec 7>&-
+
+ADMINISTRATOR=$(sed -n '1p' "$ADMINISTRATOR_OUTPUT")
+case "$ADMINISTRATOR" in *[!A-Za-z0-9_.-]*|'') ADMINISTRATOR= ;; esac
 
 INSTALL_COMMITTED=1
 find "$TRANSACTION_DIR" -mindepth 1 -maxdepth 1 -type f -exec rm -f {} \;
 rmdir "$TRANSACTION_DIR"
 
-say ""
-say "Atum installed successfully."
-say ""
-say "Installed at: $PREFIX"
-say "Kamailio configuration remains unchanged."
 if [ "$REMOTE_MODE" -eq 1 ]; then
     HOST_ADDRESSES=$(hostname -I 2>/dev/null || true)
     OPEN_URL=$(atum_https_url "$LISTEN_ADDRESS" "$LISTEN_PORT" "$HOST_ADDRESSES" "${SSH_CONNECTION:-}")
-    LISTEN_URL_HOST=$(atum_url_host "$LISTEN_ADDRESS")
-    say "Web server: $WEB_SERVER_NAME"
-    say "PHP-FPM: dedicated Atum pool"
-    say "HTTPS is listening on $LISTEN_URL_HOST:$LISTEN_PORT."
-    say ""
-    say "Open:"
-    say "$OPEN_URL"
-    say ""
-    say "The development certificate is self-signed."
-    say "No firewall rules were changed. Permit TCP/$LISTEN_PORT only from your trusted administration address or network."
-    say ""
-    say "NOT SUITABLE FOR PRODUCTION."
 else
-    say "Run for local testing: sudo -u atum atum serve"
-    say "For remote testing, install explicitly with --development --remote. The built-in server remains loopback-only."
+    OPEN_URL=
 fi
-say "Run: atum-uninstall --check to preview complete removal."
+atum_print_completion "$PREFIX" "$ADMINISTRATOR" "$REMOTE_MODE" "$WEB_SERVER_NAME" \
+    "$LISTEN_ADDRESS" "$LISTEN_PORT" "$OPEN_URL"

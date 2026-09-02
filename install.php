@@ -55,6 +55,7 @@ $options = [
     'start-fpm-service' => '0',
     'progress' => '0',
     'verbose' => '0',
+    'administrator-output-fd' => '',
     'service-command' => 'systemctl',
     'openssl' => 'openssl',
 ];
@@ -396,7 +397,13 @@ try {
     @chgrp($configDir . '/atum.conf', 'atum');
 
     $committed = true;
-    if ($options['progress'] === '1') {
+    if ($options['administrator-output-fd'] === '7') {
+        $administratorOutput = @fopen('php://fd/7', 'w');
+        if (is_resource($administratorOutput)) {
+            fwrite($administratorOutput, $username . "\n");
+            fclose($administratorOutput);
+        }
+    } elseif ($options['progress'] === '1') {
         echo "Initial administrator: {$username}\n";
     }
 } catch (Throwable $e) {
