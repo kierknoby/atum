@@ -65,7 +65,7 @@ if (($ledger['schema'] ?? null) !== 1) {
     exit(1);
 }
 
-$target = (string) ($ledger['paths']['application'] ?? '');
+$applicationPath = (string) ($ledger['paths']['application'] ?? '');
 $configDir = (string) ($ledger['paths']['configuration'] ?? '');
 $stateDir = (string) ($ledger['paths']['state'] ?? $stateDir);
 $packages = is_array($ledger['packages_added'] ?? null) ? $ledger['packages_added'] : [];
@@ -138,7 +138,7 @@ if ($installId === '' || !preg_match('/^[a-f0-9]{32}$/', $installId)) {
     fwrite(STDERR, "Install ledger has no valid installation ID.\n");
     exit(1);
 }
-foreach ([$target, $stateDir, $configDir] as $path) {
+foreach ([$applicationPath, $stateDir, $configDir] as $path) {
     if (!verifyOwnedTree($path, $installId)) {
         fwrite(STDERR, "Atum ownership marker does not match the install ledger: {$path}\nRefusing to continue.\n");
         exit(1);
@@ -188,14 +188,14 @@ if (!is_array($disabledDefaultSites)) {
     throw new RuntimeException('Invalid disabled default-site records in install ledger.');
 }
 foreach ($disabledDefaultSites as $entry) {
-    $path = (string) ($entry['path'] ?? '');
-    $target = (string) ($entry['target'] ?? '');
-    if (!preg_match('#^/[A-Za-z0-9._/-]+$#', $path)
-        || !in_array($target, ['../sites-available/default', '/etc/nginx/sites-available/default', '../sites-available/000-default.conf', '/etc/apache2/sites-available/000-default.conf'], true)) {
+    $sitePath = (string) ($entry['path'] ?? '');
+    $siteTarget = (string) ($entry['target'] ?? '');
+    if (!preg_match('#^/[A-Za-z0-9._/-]+$#', $sitePath)
+        || !in_array($siteTarget, ['../sites-available/default', '/etc/nginx/sites-available/default', '../sites-available/000-default.conf', '/etc/apache2/sites-available/000-default.conf'], true)) {
         throw new RuntimeException('Invalid disabled default-site record in install ledger.');
     }
-    if (file_exists($path) || is_link($path)) {
-        throw new RuntimeException('Default web-server site changed after Atum disabled it; refusing to overwrite it: ' . $path);
+    if (file_exists($sitePath) || is_link($sitePath)) {
+        throw new RuntimeException('Default web-server site changed after Atum disabled it; refusing to overwrite it: ' . $sitePath);
     }
 }
 
@@ -232,8 +232,8 @@ foreach ($preflightCreatedHostFiles as $entry) {
 }
 
 $preflightLinks = [
-    '/usr/local/sbin/atum' => $target . '/bin/atum',
-    '/usr/local/sbin/atum-uninstall' => $target . '/uninstall.php',
+    '/usr/local/sbin/atum' => $applicationPath . '/bin/atum',
+    '/usr/local/sbin/atum-uninstall' => $applicationPath . '/uninstall.php',
 ];
 
 foreach ($preflightLinks as $link => $expected) {
@@ -248,7 +248,7 @@ foreach ($preflightLinks as $link => $expected) {
 }
 
 echo "Atum clean-removal plan\n\n";
-echo "Application     : {$target}\n";
+echo "Application     : {$applicationPath}\n";
 echo "Configuration   : {$configDir}\n";
 echo "State           : {$stateDir}\n";
 echo "CLI links       : /usr/local/sbin/atum, /usr/local/sbin/atum-uninstall\n";
@@ -358,8 +358,10 @@ foreach ($createdHostFiles as $entry) {
 }
 
 foreach ($disabledDefaultSites as $entry) {
-    if (!symlink((string) $entry['target'], (string) $entry['path'])) {
-        throw new RuntimeException('Unable to restore package default web-server site: ' . $entry['path']);
+    $sitePath = (string) ($entry['path'] ?? '');
+    $siteTarget = (string) ($entry['target'] ?? '');
+    if (!symlink($siteTarget, $sitePath)) {
+        throw new RuntimeException('Unable to restore package default web-server site: ' . $sitePath);
     }
 }
 
@@ -387,8 +389,8 @@ if (($account['user_created'] ?? false) && commandExists('ps')) {
 
 // Remove only symlinks that still point at the paths Atum created.
 $links = [
-    '/usr/local/sbin/atum' => $target . '/bin/atum',
-    '/usr/local/sbin/atum-uninstall' => $target . '/uninstall.php',
+    '/usr/local/sbin/atum' => $applicationPath . '/bin/atum',
+    '/usr/local/sbin/atum-uninstall' => $applicationPath . '/uninstall.php',
 ];
 foreach ($links as $link => $expected) {
     if (is_link($link)) {
@@ -458,7 +460,7 @@ if (!$keepDependencies && $packages) {
 // Core Atum trees are removed last. Configuration, which contains the
 // authoritative ledger, is deliberately the final tree so an interrupted
 // uninstall remains retryable for as long as possible.
-removeTree($target);
+removeTree($applicationPath);
 removeTree($stateDir);
 removeTree($configDir);
 

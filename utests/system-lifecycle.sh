@@ -11,7 +11,7 @@ export ATUM_TRANSACTION_DIR="$TEST_ROOT/transaction"
 export ATUM_LIFECYCLE_LOCK_PATH="$TEST_ROOT/lifecycle-lock"
 export ATUM_ADMIN_USER=testadmin
 export ATUM_ADMIN_PASSWORD_FILE="$TEST_ROOT/password"
-cleanup() { if [ -f "$ATUM_CONFIG_DIR/install-ledger.json" ]; then php "$ROOT/uninstall.php" --config-dir="$ATUM_CONFIG_DIR" --yes --keep-dependencies >/dev/null 2>&1 || true; fi; [ ! -L /usr/local/sbin/atum ] || [ "$(readlink /usr/local/sbin/atum)" != "$ATUM_PREFIX/bin/atum" ] || unlink /usr/local/sbin/atum; [ ! -L /usr/local/sbin/atum-uninstall ] || [ "$(readlink /usr/local/sbin/atum-uninstall)" != "$ATUM_PREFIX/uninstall.php" ] || unlink /usr/local/sbin/atum-uninstall; rm -rf "$TEST_ROOT"; }
+cleanup() { if [ -f "$ATUM_CONFIG_DIR/install-ledger.json" ]; then php "$ROOT/uninstall.php" --config-dir="$ATUM_CONFIG_DIR" --yes --keep-dependencies >/dev/null 2>&1 || true; fi; [ ! -L /usr/local/sbin/atum ] || [ "$(readlink /usr/local/sbin/atum)" != "$ATUM_PREFIX/bin/atum" ] || unlink /usr/local/sbin/atum; [ ! -L /usr/local/sbin/atum ] || [ "$(readlink /usr/local/sbin/atum)" != "$TEST_ROOT/default-site-restore/not-atum" ] || unlink /usr/local/sbin/atum; [ ! -L /usr/local/sbin/atum-uninstall ] || [ "$(readlink /usr/local/sbin/atum-uninstall)" != "$ATUM_PREFIX/uninstall.php" ] || unlink /usr/local/sbin/atum-uninstall; rm -rf "$TEST_ROOT"; }
 trap cleanup EXIT HUP INT TERM
 printf '%s\n' 'Lifecycle test password 123' > "$ATUM_ADMIN_PASSWORD_FILE"
 install_id=0123456789abcdef0123456789abcdef
@@ -208,20 +208,53 @@ PATH="$TEST_ROOT/bin:$PATH" php "$ROOT/uninstall.php" --config-dir="$ATUM_CONFIG
 [ -f "$TEST_ROOT/host/nginx/operator.conf" ]
 ! grep -Eq '(^| )(ufw|firewall-cmd|iptables|nft)( |$)' "$TEST_ROOT/service-actions"
 
-# A default-site link disabled by a successful new-server installation is an
-# owned ledger change and is restored only during successful uninstall.
+# Reproduce the live KAM0 ledger sequence: a disabled default site and correct
+# global CLI links must coexist without changing the application path used by
+# either preflight or final tree removal.
 default_restore_root="$TEST_ROOT/default-site-restore"
-mkdir -p "$default_restore_root/application" "$default_restore_root/state" "$default_restore_root/config" "$default_restore_root/nginx/sites-available" "$default_restore_root/nginx/sites-enabled"
+export ATUM_PREFIX="$default_restore_root/application"
+export ATUM_STATE_DIR="$default_restore_root/state"
+export ATUM_CONFIG_DIR="$default_restore_root/config"
+mkdir -p "$ATUM_PREFIX/bin" "$ATUM_STATE_DIR" "$ATUM_CONFIG_DIR" \
+    "$default_restore_root/nginx/sites-available" \
+    "$default_restore_root/nginx/sites-enabled" \
+    "$default_restore_root/work" \
+    "$default_restore_root/sites-available/default"
 default_restore_id=11111111111111111111111111111111
 for directory in application state config; do printf '%s\n' "$default_restore_id" > "$default_restore_root/$directory/.atum-install-id"; done
 printf '%s\n' 'package default site' > "$default_restore_root/nginx/sites-available/default"
+printf '%s\n' 'must never be selected as the application tree' > "$default_restore_root/sites-available/default/sentinel"
+printf '%s\n' '#!/bin/sh' 'exit 0' > "$ATUM_PREFIX/bin/atum"
+printf '%s\n' '<?php' > "$ATUM_PREFIX/uninstall.php"
 cat > "$default_restore_root/config/install-ledger.json" <<EOF
 {"schema":1,"install_id":"$default_restore_id","package_manager":"apt-get","packages_added":[],"paths":{"application":"$default_restore_root/application","state":"$default_restore_root/state","configuration":"$default_restore_root/config"},"system_account":{"user_created":false,"group_created":false},"kamailio":{"installer_modified":false},"host_integrations":{"services":[],"created_files":[],"modified_files":[],"disabled_default_sites":[{"path":"$default_restore_root/nginx/sites-enabled/default","target":"../sites-available/default"}],"reload_services":[]},"remote_development":null}
 EOF
 chmod 0600 "$default_restore_root/config/install-ledger.json"
-php "$ROOT/uninstall.php" --config-dir="$default_restore_root/config" --yes --keep-dependencies >/dev/null
+ln -s "$ATUM_PREFIX/bin/atum" /usr/local/sbin/atum
+ln -s "$ATUM_PREFIX/uninstall.php" /usr/local/sbin/atum-uninstall
+
+(cd "$default_restore_root/work" && php "$ROOT/uninstall.php" --config-dir="$ATUM_CONFIG_DIR" --check) > "$default_restore_root/check.out"
+grep -q "^Application     : $ATUM_PREFIX$" "$default_restore_root/check.out"
+
+# The disabled-site record must not weaken the existing changed-link refusal.
+unlink /usr/local/sbin/atum
+ln -s "$default_restore_root/not-atum" /usr/local/sbin/atum
+if (cd "$default_restore_root/work" && php "$ROOT/uninstall.php" --config-dir="$ATUM_CONFIG_DIR" --check) > "$default_restore_root/changed-link.out" 2>&1; then
+    echo 'uninstall check accepted a changed Atum CLI link with a disabled default-site record' >&2
+    exit 1
+fi
+grep -q 'Refusing to remove changed symlink' "$default_restore_root/changed-link.out"
+[ -d "$ATUM_PREFIX" ] && [ -d "$ATUM_STATE_DIR" ] && [ -d "$ATUM_CONFIG_DIR" ]
+[ -f "$default_restore_root/sites-available/default/sentinel" ]
+
+unlink /usr/local/sbin/atum
+ln -s "$ATUM_PREFIX/bin/atum" /usr/local/sbin/atum
+(cd "$default_restore_root/work" && php "$ROOT/uninstall.php" --config-dir="$ATUM_CONFIG_DIR" --yes --keep-dependencies) >/dev/null
 [ -L "$default_restore_root/nginx/sites-enabled/default" ]
 [ "$(readlink "$default_restore_root/nginx/sites-enabled/default")" = ../sites-available/default ]
+[ ! -e "$ATUM_PREFIX" ] && [ ! -e "$ATUM_STATE_DIR" ] && [ ! -e "$ATUM_CONFIG_DIR" ]
+[ ! -e /usr/local/sbin/atum ] && [ ! -e /usr/local/sbin/atum-uninstall ]
+[ -f "$default_restore_root/sites-available/default/sentinel" ]
 
 # Install from a genuine Git work tree containing repository metadata and
 # arbitrary untracked files. The manifest alone defines the installed files.
