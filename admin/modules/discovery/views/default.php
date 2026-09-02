@@ -4,6 +4,7 @@ if (!defined('ATUM_IS_AUTH')) { die('No direct script access allowed'); }
 $e = [AtumView::class, 'escape'];
 $modulePresentation = $report['presentation']['modules'] ?? ['capabilities' => [], 'coverage' => ['total' => 0, 'recognised' => 0, 'unclassified' => 0], 'groups' => []];
 $system = $report['presentation']['system'] ?? ['findings' => [], 'listeners' => [], 'routes' => ['groups' => [], 'custom_by_component' => []], 'composition' => [], 'confidence' => ['level' => 'partial', 'scope' => 'unknown', 'reasons' => [], 'gaps' => [], 'unclassified_modules' => 0, 'unknown_statements' => 0, 'warnings' => 0]];
+$requestProcessing = $report['presentation']['request_processing'] ?? ['flows' => [], 'coverage' => ['recognised' => 0, 'custom' => 0, 'unresolved' => 0, 'cycles' => [], 'unreferenced' => []]];
 ?>
 <div class="page-heading">
   <div>
@@ -29,6 +30,36 @@ $system = $report['presentation']['system'] ?? ['findings' => [], 'listeners' =>
       <div class="stat"><span>Routes</span><strong><?= count($report['routes']) ?></strong></div>
       <div class="stat"><span>Discovery confidence</span><strong><?= $e(ucfirst((string) $system['confidence']['level'])) ?></strong></div>
     </div>
+
+    <section class="panel request-processing">
+      <div class="panel-heading"><h2>How requests are handled</h2></div>
+      <div class="panel-body">
+        <p class="flow-intro">Static interpretation of recognised routing constructs. It describes configured control flow, not observed SIP traffic.</p>
+        <p class="flow-coverage"><strong>Route interpretation:</strong> <?= (int) $requestProcessing['coverage']['recognised'] ?> recognised statements · <?= (int) $requestProcessing['coverage']['custom'] ?> custom statements · <?= (int) $requestProcessing['coverage']['unresolved'] ?> unresolved route calls</p>
+        <?php if ($requestProcessing['flows'] === []): ?>
+          <p class="muted-copy">No route bodies were discovered.</p>
+        <?php endif; ?>
+        <?php foreach ($requestProcessing['flows'] as $flow): ?>
+          <article class="flow-route">
+            <header><h3><?= $e($flow['label']) ?></h3><small><code><?= $e($flow['source']['file']) ?>:<?= (int) $flow['source']['line'] ?></code></small></header>
+            <?php if ($flow['statements'] === []): ?><p class="muted-copy">No statically recognised statements in this route body.</p><?php endif; ?>
+            <ol class="flow-steps">
+              <?php foreach ($flow['statements'] as $step): ?>
+                <li class="flow-step flow-step-<?= $e($step['kind']) ?>" style="--flow-depth: <?= (int) $step['depth'] ?>">
+                  <?php if ($step['conditions'] !== []): ?><span class="flow-condition"><?= $e(implode(' / ', $step['conditions'])) ?></span><?php endif; ?>
+                  <span><?= $e($step['meaning']) ?></span>
+                  <?php if (($step['terminal'] ?? false) === true): ?><small>terminal branch</small><?php endif; ?>
+                  <?php if ($step['confidence'] !== 'syntactic'): ?><small><?= $e(ucfirst((string) $step['confidence'])) ?> discovery</small><?php endif; ?>
+                  <code><?= $e($step['source']['file']) ?>:<?= (int) $step['source']['line'] ?></code>
+                </li>
+              <?php endforeach; ?>
+            </ol>
+          </article>
+        <?php endforeach; ?>
+        <?php if ($requestProcessing['coverage']['cycles'] !== []): ?><p class="finding-caveat">Static route-call cycle detected. Atum shows the configured references but does not follow them indefinitely.</p><?php endif; ?>
+        <?php if ($requestProcessing['coverage']['unreferenced'] !== []): ?><p class="finding-caveat"><?= count($requestProcessing['coverage']['unreferenced']) ?> named route<?= count($requestProcessing['coverage']['unreferenced']) === 1 ? '' : 's' ?> had no static reference found.</p><?php endif; ?>
+      </div>
+    </section>
 
     <section class="panel">
       <div class="panel-heading"><h2>System interpretation</h2></div>

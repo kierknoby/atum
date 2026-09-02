@@ -37,7 +37,7 @@ $report = (new AtumKamailioScanner())->scan($fixture . '/root.cfg');
 $json = json_encode($report, JSON_UNESCAPED_SLASHES);
 check(count($report['files']) === 2, 'scanner follows literal recursive includes');
 check($report['completeness']['effective_configuration_proven'] === false, 'scanner states that effective configuration is not proven');
-check(count($report['unknown']) >= 4, 'scanner retains conditional, non-literal and unsupported configuration');
+check(count($report['unknown']) >= 3 && ($report['routes'][1]['statements'][1]['kind'] ?? '') === 'custom', 'scanner retains top-level unknown content and structurally preserves route custom statements');
 check(in_array('conditional', array_column(array_column($report['modules'], 'source'), 'confidence'), true), 'scanner marks conditional discoveries');
 check(!str_contains((string) $json, 'must-not-escape') && !str_contains((string) $json, 'non-obvious-secret') && !str_contains((string) $json, 'unquoted-secret-material') && !str_contains((string) $json, '4321') && !str_contains((string) $json, 'password'), 'scanner fails closed for obvious, bespoke and unquoted secrets');
 check(str_contains((string) $json, '"debug","value":"1"'), 'scanner retains positively classified safe values');
@@ -65,20 +65,83 @@ removeFixture($fixture);
 
 $interpretationFixture = sys_get_temp_dir() . '/atum-interpretation-' . bin2hex(random_bytes(5)); mkdir($interpretationFixture, 0700);
 mkdir($interpretationFixture . '/components', 0700);
-file_put_contents($interpretationFixture . '/components/custom-routes.inc', "onreply_route[RTPengine] { return; }\nroute[POLICY] { return; }\nroute[DIALOG_BACKEND] { return; }\n");
-file_put_contents($interpretationFixture . '/kamailio.cfg', "listen=udp:198.51.100.10:5060\nloadmodule \"tm.so\"\nloadmodule \"rr.so\"\nloadmodule \"nathelper.so\"\nloadmodule \"rtpengine.so\"\nloadmodule \"vendor_extension.so\"\ninclude_file \"components/custom-routes.inc\"\nrequest_route { return; }\n");
-$interpretation = (new AtumKamailioSemantics())->present((new AtumKamailioScanner())->scan($interpretationFixture . '/kamailio.cfg'))['presentation']['system'];
+file_put_contents($interpretationFixture . '/components/custom-routes.inc', <<<'CFG'
+onreply_route[RTP] {
+    rtpengine_answer("secret media flags");
+    return;
+}
+failure_route[FAILED] {
+    send_reply(500, "private failure");
+}
+branch_route[BRANCH] {
+    add_contact_alias();
+}
+route[POLICY] {
+    if (is_method("INVITE")) {
+        rtpengine_offer("private flags");
+        route(BACKEND);
+    }
+    custom_vendor_logic secret-material;
+}
+route[BACKEND] {
+    ds_select_dst(1, 4);
+    route(LOOP);
+}
+route[LOOP] {
+    route(BACKEND);
+}
+route[ORPHAN] {
+    return;
+}
+CFG);
+file_put_contents($interpretationFixture . '/kamailio.cfg', <<<'CFG'
+listen=udp:198.51.100.10:5060
+loadmodule "tm.so"
+loadmodule "rr.so"
+loadmodule "nathelper.so"
+loadmodule "rtpengine.so"
+loadmodule "vendor_extension.so"
+include_file "components/custom-routes.inc"
+request_route {
+    record_route();
+    t_on_reply("RTP");
+    t_on_failure("FAILED");
+    t_on_branch("BRANCH");
+    route(POLICY);
+    route($var(dynamic_target));
+    t_relay();
+}
+CFG);
+$routeReport = (new AtumKamailioScanner())->scan($interpretationFixture . '/kamailio.cfg');
+$routeJson = json_encode($routeReport, JSON_UNESCAPED_SLASHES);
+$presentedRouteReport = (new AtumKamailioSemantics())->present($routeReport);
+$interpretation = $presentedRouteReport['presentation']['system'];
+$requestProcessing = $presentedRouteReport['presentation']['request_processing'];
 $interpretationFindings = array_column($interpretation['findings'], 'explanation');
 check(in_array('SIP over UDP listening on 198.51.100.10:5060 (non-loopback address).', $interpretationFindings, true), 'listener interpretation identifies SIP transport and non-loopback binding without claiming public reachability');
 check(in_array('RTPengine media handling appears to be configured.', $interpretationFindings, true), 'module plus matching reply route produces stronger configured evidence');
 $rtpengineFinding = array_values(array_filter($interpretation['findings'], static fn(array $finding): bool => $finding['title'] === 'RTPengine media handling'))[0];
-check(count($rtpengineFinding['evidence']) === 2 && str_contains($rtpengineFinding['caveat'], 'does not establish'), 'correlated media finding preserves provenance and does not claim active traffic');
+check(count($rtpengineFinding['evidence']) >= 2 && str_contains($rtpengineFinding['caveat'], 'does not establish'), 'correlated media finding preserves provenance and does not claim active traffic');
 check(in_array('Stateful transaction handling is available through tm.', $interpretationFindings, true) && str_contains(implode(' ', array_column($interpretation['findings'], 'caveat')), 'does not prove active use'), 'module-only findings remain availability statements');
-check(array_keys($interpretation['routes']['custom_by_component']) === [$interpretationFixture . '/components/custom-routes.inc'] && count($interpretation['routes']['custom_by_component'][$interpretationFixture . '/components/custom-routes.inc']) === 2, 'custom named routes are grouped by included source component');
-check(array_column($interpretation['composition'], 'kind') === ['Main configuration', 'Included configuration'] && $interpretation['composition'][1]['routes'] === 3, 'configuration composition identifies included components and their discovered content');
+check(array_keys($interpretation['routes']['custom_by_component']) === [$interpretationFixture . '/components/custom-routes.inc'] && count($interpretation['routes']['custom_by_component'][$interpretationFixture . '/components/custom-routes.inc']) === 4, 'custom named routes are grouped by included source component');
+check(array_column($interpretation['composition'], 'kind') === ['Main configuration', 'Included configuration'] && $interpretation['composition'][1]['routes'] === 7, 'configuration composition identifies included components and their discovered content');
 check($interpretation['confidence']['level'] === 'partial' && $interpretation['confidence']['unclassified_modules'] === 1 && in_array('No recognised registrar/location modules were found in the scanned configuration.', $interpretation['confidence']['gaps'], true), 'partial confidence exposes unclassified content and conservative absence wording');
 check($interpretation['confidence']['reasons'] === ['conditional preprocessing and custom/KEMI logic are not evaluated'], 'interpretation preserves scanner completeness limitations');
+check($requestProcessing['flows'][0]['label'] === 'onreply_route[RTP]' || in_array('Incoming SIP request: request_route', array_column($requestProcessing['flows'], 'label'), true), 'route-body model preserves route type, source and ordered statements');
+$requestFlow = array_values(array_filter($requestProcessing['flows'], static fn(array $flow): bool => $flow['type'] === 'request_route'))[0];
+check(array_column($requestFlow['statements'], 'meaning') === ['Apply Record-Route', 'Reply processing is assigned to onreply_route[RTP]', 'Failure processing is assigned to failure_route[FAILED]', 'Branch processing is assigned to branch_route[BRANCH]', 'Call route[POLICY]', 'Dynamic route call', 'Relay request statefully'], 'request flow recognises ordered actions, static calls, wiring and terminal relay');
+$policyFlow = array_values(array_filter($requestProcessing['flows'], static fn(array $flow): bool => $flow['name'] === 'POLICY'))[0];
+check($policyFlow['statements'][0]['meaning'] === 'If request method is INVITE' && $policyFlow['statements'][1]['conditions'] === ['If request method is INVITE'] && $policyFlow['statements'][3]['kind'] === 'custom', 'method conditions, nesting and unknown custom statements are preserved');
+check(count($requestProcessing['edges']) === 7 && $requestProcessing['coverage']['unresolved'] === 1 && $requestProcessing['coverage']['custom'] >= 1, 'graph records static route and reply/failure/branch edges while retaining unresolved/custom nodes');
+check($requestProcessing['coverage']['cycles'] !== [] && array_column($requestProcessing['coverage']['unreferenced'], 'name') === ['ORPHAN'], 'graph detects recursive calls and reports only no-static-reference routes');
+check(!str_contains((string) $routeJson, 'secret media flags') && !str_contains((string) $routeJson, 'secret-material'), 'route action arguments and custom statements remain redacted');
 removeFixture($interpretationFixture);
+
+$conditionFixture = sys_get_temp_dir() . '/atum-conditions-' . bin2hex(random_bytes(5)); mkdir($conditionFixture, 0700);
+file_put_contents($conditionFixture . '/kamailio.cfg', "request_route {\nif (\$rm == \"BYE\") {\nreturn;\n}\nif (\$si == \"192.0.2.10\") {\nreturn;\n}\nif (\$sp == 5060) {\nreturn;\n}\n}\n");
+$conditionStatements = (new AtumKamailioScanner())->scan($conditionFixture . '/kamailio.cfg')['routes'][0]['statements'];
+check(array_column(array_values(array_filter($conditionStatements, static fn(array $statement): bool => $statement['kind'] === 'condition')), 'meaning') === ['If request method is BYE', 'If source IP equals 192.0.2.10', 'If source port equals 5060'] && array_column(array_values(array_filter($conditionStatements, static fn(array $statement): bool => $statement['kind'] === 'control')), 'control') === ['return', 'return', 'return'], 'common literal method, source IP and source port conditions are interpreted without retaining raw expressions');
+removeFixture($conditionFixture);
 
 if (!extension_loaded('pdo_sqlite')) { fwrite(STDERR, "FAIL  pdo_sqlite is mandatory; security tests cannot be skipped\n"); exit(1); }
 $state = sys_get_temp_dir() . '/atum-state-' . bin2hex(random_bytes(5)); mkdir($state, 0700); putenv('ATUM_STATE_DIR=' . $state); putenv('KAMAILIO_CONFIG=' . $root . '/examples/kamailio.cfg');

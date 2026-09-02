@@ -75,6 +75,37 @@ final class AtumKamailioSemantics
         'textopsx' => ['group' => 'utilities', 'purpose' => 'Extended SIP message text operations'],
     ];
 
+    /** @var array<string,array{meaning:string,category:string,terminal?:bool}> */
+    private const ROUTE_ACTIONS = [
+        't_relay' => ['meaning' => 'Relay request statefully', 'category' => 'transaction', 'terminal' => true],
+        't_newtran' => ['meaning' => 'Create a stateful transaction', 'category' => 'transaction'],
+        'record_route' => ['meaning' => 'Apply Record-Route', 'category' => 'routing'],
+        'loose_route' => ['meaning' => 'Apply loose routing', 'category' => 'routing'],
+        'nat_uac_test' => ['meaning' => 'Test request for NAT handling', 'category' => 'nat'],
+        'fix_nated_contact' => ['meaning' => 'Fix NATed Contact', 'category' => 'nat'],
+        'fix_nated_register' => ['meaning' => 'Fix NATed registration', 'category' => 'nat'],
+        'add_contact_alias' => ['meaning' => 'Add Contact alias', 'category' => 'nat'],
+        'handle_ruri_alias' => ['meaning' => 'Handle R-URI alias', 'category' => 'nat'],
+        'set_contact_alias' => ['meaning' => 'Set Contact alias', 'category' => 'nat'],
+        'rtpengine_offer' => ['meaning' => 'Apply RTPengine offer processing', 'category' => 'media'],
+        'rtpengine_answer' => ['meaning' => 'Apply RTPengine answer processing', 'category' => 'media'],
+        'rtpengine_manage' => ['meaning' => 'Apply RTPengine media processing', 'category' => 'media'],
+        'rtpengine_delete' => ['meaning' => 'Delete RTPengine media session', 'category' => 'media'],
+        'rtpproxy_offer' => ['meaning' => 'Apply RTPProxy offer processing', 'category' => 'media'],
+        'rtpproxy_answer' => ['meaning' => 'Apply RTPProxy answer processing', 'category' => 'media'],
+        'save' => ['meaning' => 'Save registration or location data', 'category' => 'registration'],
+        'lookup' => ['meaning' => 'Look up registered location', 'category' => 'registration'],
+        'www_authorize' => ['meaning' => 'Check WWW authentication', 'category' => 'authentication'],
+        'proxy_authorize' => ['meaning' => 'Check proxy authentication', 'category' => 'authentication'],
+        'consume_credentials' => ['meaning' => 'Consume authentication credentials', 'category' => 'authentication'],
+        'ds_select_dst' => ['meaning' => 'Select dispatcher destination', 'category' => 'dispatching'],
+        'ds_select_domain' => ['meaning' => 'Select dispatcher domain', 'category' => 'dispatching'],
+        'ds_next_dst' => ['meaning' => 'Select next dispatcher destination', 'category' => 'dispatching'],
+        'ds_mark_dst' => ['meaning' => 'Mark dispatcher destination', 'category' => 'dispatching'],
+        'sl_send_reply' => ['meaning' => 'Send local stateless SIP reply', 'category' => 'reply', 'terminal' => true],
+        'send_reply' => ['meaning' => 'Send local SIP reply', 'category' => 'reply', 'terminal' => true],
+    ];
+
     public function present(array $report): array
     {
         $grouped = array_fill_keys(array_keys(self::GROUPS), []);
@@ -123,8 +154,93 @@ final class AtumKamailioSemantics
             'groups' => $groups,
         ];
         $report['presentation']['system'] = $this->systemPresentation($report, $recognised, $total - $recognised);
+        $report['presentation']['request_processing'] = $this->requestProcessing($report);
 
         return $report;
+    }
+
+    /** @return array<string,mixed> */
+    private function requestProcessing(array $report): array
+    {
+        $routes = $report['routes'] ?? [];
+        $routeIndex = [];
+        foreach ($routes as $index => $route) {
+            $key = (string) ($route['type'] ?? '') . ':' . (string) ($route['name'] ?? 'main');
+            $routeIndex[$key] = $index;
+        }
+        $flows = [];
+        $edges = [];
+        $recognised = 0;
+        $custom = 0;
+        $unresolved = 0;
+        foreach ($routes as $index => $route) {
+            $steps = [];
+            foreach (($route['statements'] ?? []) as $statement) {
+                $step = $this->routeStep($statement, $routeIndex);
+                $steps[] = $step;
+                if ($step['kind'] === 'custom') { $custom++; } else { $recognised++; }
+                if ($step['kind'] === 'unresolved-route-call') { $unresolved++; }
+                if (isset($step['edge'])) { $edges[] = $step['edge'] + ['from' => $index]; }
+            }
+            $flows[] = ['id' => $index, 'label' => $this->routeLabel($route), 'type' => $route['type'], 'name' => $route['name'] ?? null, 'source' => $route['source'], 'statements' => $steps];
+        }
+        $cycles = $this->routeCycles($edges);
+        $referenced = array_unique(array_filter(array_map(static fn(array $edge): ?int => $edge['to'] ?? null, $edges), static fn(mixed $id): bool => is_int($id)));
+        $unreferenced = [];
+        foreach ($flows as $flow) {
+            if ($flow['type'] === 'route' && !in_array($flow['id'], $referenced, true)) { $unreferenced[] = $flow; }
+        }
+        return ['flows' => $flows, 'edges' => $edges, 'coverage' => ['recognised' => $recognised, 'custom' => $custom, 'unresolved' => $unresolved, 'cycles' => $cycles, 'unreferenced' => $unreferenced]];
+    }
+
+    /** @return array<string,mixed> */
+    private function routeStep(array $statement, array $routeIndex): array
+    {
+        $base = ['source' => $statement['source'], 'confidence' => $statement['confidence'] ?? 'unknown', 'depth' => $statement['depth'] ?? 0, 'conditions' => array_map(static fn(array $condition): string => $condition['meaning'], $statement['conditions'] ?? [])];
+        if ($statement['kind'] === 'condition') { return $base + ['kind' => 'condition', 'meaning' => $statement['meaning']]; }
+        if ($statement['kind'] === 'custom-condition') { return $base + ['kind' => 'custom', 'meaning' => 'Custom condition']; }
+        if ($statement['kind'] === 'route-call') {
+            $key = 'route:' . $statement['target'];
+            return $base + ['kind' => 'route-call', 'meaning' => 'Call route[' . $statement['target'] . ']', 'edge' => ['kind' => 'call', 'label' => 'Calls route[' . $statement['target'] . ']', 'to' => $routeIndex[$key] ?? null]];
+        }
+        if ($statement['kind'] === 'unresolved-route-call') { return $base + ['kind' => 'unresolved-route-call', 'meaning' => 'Dynamic route call']; }
+        if ($statement['kind'] === 'control') {
+            $meaning = ['drop' => 'Drop request', 'exit' => 'Stop route processing', 'return' => 'Return to calling route'][$statement['control']] ?? 'Control flow';
+            return $base + ['kind' => 'action', 'meaning' => $meaning, 'terminal' => $statement['control'] !== 'return'];
+        }
+        if ($statement['kind'] === 'function-call') {
+            $function = $statement['function'];
+            if (isset(self::ROUTE_ACTIONS[$function])) { return $base + ['kind' => 'action', 'meaning' => self::ROUTE_ACTIONS[$function]['meaning'], 'category' => self::ROUTE_ACTIONS[$function]['category'], 'terminal' => self::ROUTE_ACTIONS[$function]['terminal'] ?? false]; }
+            $wiring = ['t_on_reply' => ['onreply_route', 'Reply processing is assigned to onreply_route'], 't_on_failure' => ['failure_route', 'Failure processing is assigned to failure_route'], 't_on_branch' => ['branch_route', 'Branch processing is assigned to branch_route']];
+            if (isset($wiring[$function]) && isset($statement['target'])) {
+                [$type, $meaning] = $wiring[$function];
+                $key = $type . ':' . $statement['target'];
+                return $base + ['kind' => 'wiring', 'meaning' => $meaning . '[' . $statement['target'] . ']', 'edge' => ['kind' => 'wiring', 'label' => $meaning . '[' . $statement['target'] . ']', 'to' => $routeIndex[$key] ?? null]];
+            }
+        }
+        return $base + ['kind' => 'custom', 'meaning' => 'Custom or uninterpreted statement'];
+    }
+
+    private function routeLabel(array $route): string
+    {
+        return $route['type'] === 'request_route' ? 'Incoming SIP request: request_route' : $route['type'] . '[' . ($route['name'] ?? 'main') . ']';
+    }
+
+    /** @return list<list<int>> */
+    private function routeCycles(array $edges): array
+    {
+        $adjacent = [];
+        foreach ($edges as $edge) { if ($edge['kind'] === 'call' && isset($edge['to'])) { $adjacent[$edge['from']][] = $edge['to']; } }
+        $cycles = []; $visiting = []; $visited = [];
+        $visit = function (int $node, array $path) use (&$visit, &$adjacent, &$cycles, &$visiting, &$visited): void {
+            if (isset($visiting[$node])) { $start = array_search($node, $path, true); $cycles[] = array_slice($path, $start === false ? 0 : $start); return; }
+            if (isset($visited[$node])) { return; }
+            $visiting[$node] = true;
+            foreach ($adjacent[$node] ?? [] as $next) { $visit($next, [...$path, $node]); }
+            unset($visiting[$node]); $visited[$node] = true;
+        };
+        foreach (array_keys($adjacent) as $node) { $visit($node, []); }
+        return $cycles;
     }
 
     /** @return array<string,mixed> */
@@ -189,8 +305,14 @@ final class AtumKamailioSemantics
             if (!isset($modules[$moduleName])) {
                 continue;
             }
-            $matchingRoutes = array_values(array_filter($routes['all'], static fn(array $route): bool => $route['confidence'] === 'syntactic'
-                && $route['name'] !== null && stripos($route['name'], $moduleName) !== false));
+            $matchingRoutes = array_values(array_filter($routes['all'], static function (array $route) use ($moduleName): bool {
+                if ($route['confidence'] !== 'syntactic') { return false; }
+                if ($route['name'] !== null && stripos($route['name'], $moduleName) !== false) { return true; }
+                foreach (($route['statements'] ?? []) as $statement) {
+                    if (($statement['kind'] ?? '') === 'function-call' && str_starts_with((string) ($statement['function'] ?? ''), $moduleName . '_')) { return true; }
+                }
+                return false;
+            }));
             $evidence = [['label' => 'Module ' . $moduleName . ' loaded', 'source' => $modules[$moduleName]['source']]];
             foreach ($matchingRoutes as $route) {
                 $evidence[] = ['label' => $route['label'], 'source' => $route['source']];
@@ -288,7 +410,7 @@ final class AtumKamailioSemantics
                 continue;
             }
             $name = isset($route['name']) ? (string) $route['name'] : null;
-            $entry = ['type' => $type, 'type_label' => $types[$type], 'name' => $name, 'label' => $type . ($name === null ? '' : '[' . $name . ']'), 'source' => $route['source'], 'confidence' => (string) ($route['source']['confidence'] ?? 'unknown'), 'component' => (string) ($route['source']['file'] ?? '')];
+            $entry = ['type' => $type, 'type_label' => $types[$type], 'name' => $name, 'label' => $type . ($name === null ? '' : '[' . $name . ']'), 'source' => $route['source'], 'confidence' => (string) ($route['source']['confidence'] ?? 'unknown'), 'component' => (string) ($route['source']['file'] ?? ''), 'statements' => $route['statements'] ?? []];
             $groups[$type][] = $entry;
             $all[] = $entry;
         }

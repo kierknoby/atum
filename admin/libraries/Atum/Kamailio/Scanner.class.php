@@ -52,11 +52,106 @@ final class AtumKamailioScanner
                     if ($exists) { $this->scanFile($resolved, $depth + 1); } elseif (!$optional) { $this->warning('missing_include', 'Required literal include not found', $path, $number); } continue;
                 }
                 if (preg_match('/^\s*(?:(?:#!|!!)?(?:include_file|import_file))\b/', $line)) { $this->unknown($line, $source, 'non-literal-include'); $this->report['completeness']['reasons'][] = 'a non-literal include could not be resolved'; continue; }
-                if (preg_match('/^\s*request_route\s*\{/', $line)) { $this->report['routes'][] = ['type' => 'request_route', 'source' => $source]; continue; }
-                if (preg_match('/^\s*(route|failure_route|branch_route|onreply_route|onsend_route|event_route)\s*\[\s*([^\]]+)\s*\]\s*\{/', $line, $m)) { $this->report['routes'][] = ['type' => $m[1], 'name' => trim($m[2]), 'source' => $source]; continue; }
+                if (preg_match('/^\s*request_route\s*\{(.*)$/', $line, $m)) { $this->route($handle, $number, $block, ['type' => 'request_route', 'source' => $source], $m[1], $conditional); continue; }
+                if (preg_match('/^\s*(route|failure_route|branch_route|onreply_route|onsend_route|event_route)\s*\[\s*([^\]]+)\s*\]\s*\{(.*)$/', $line, $m)) { $this->route($handle, $number, $block, ['type' => $m[1], 'name' => trim($m[2]), 'source' => $source], $m[3], $conditional); continue; }
                 $this->unknown($line, $source, 'unsupported-or-unparsed');
             }
         } finally { fclose($handle); }
+    }
+
+    /** @param resource $handle */
+    private function route($handle, int &$number, bool &$block, array $route, string $remainder, int $conditional): void
+    {
+        $route['statements'] = [];
+        $depth = 1;
+        $conditions = [];
+        if (str_contains($remainder, '}')) {
+            [$remainder] = explode('}', $remainder, 2);
+            $this->routeLine($remainder, $route['source'], $route['statements'], $depth, $conditions);
+            $depth = 0;
+        } else {
+            $this->routeLine($remainder, $route['source'], $route['statements'], $depth, $conditions);
+        }
+        while ($depth > 0 && ($raw = fgets($handle)) !== false) {
+            $number++;
+            [$line, $block] = $this->comments(rtrim($raw, "\r\n"), $block);
+            if (trim($line) === '') { continue; }
+            $source = ['file' => $route['source']['file'], 'line' => $number, 'confidence' => $conditional ? 'conditional' : 'syntactic'];
+            $this->routeLine($line, $source, $route['statements'], $depth, $conditions);
+        }
+        if ($depth > 0) { $this->warning('unterminated_route', 'Route body was not terminated', $route['source']['file'], $route['source']['line']); }
+        $this->report['routes'][] = $route;
+    }
+
+    private function routeLine(string $line, array $source, array &$statements, int &$depth, array &$conditions): void
+    {
+        $trim = trim($line);
+        if ($trim === '') { return; }
+        if (preg_match('/^}\s*(.*)$/', $trim, $closing)) {
+            $depth--;
+            array_pop($conditions);
+            $trim = trim($closing[1]);
+            if ($trim === '') { return; }
+        }
+        if (preg_match('/^if\s*\((.+)\)\s*\{\s*$/i', $trim, $match)) {
+            $condition = $this->condition($match[1], $source);
+            $statements[] = $condition + ['depth' => $depth, 'conditions' => $conditions];
+            $conditions[] = $condition;
+            $depth++;
+            return;
+        }
+        $trim = rtrim($trim, ';');
+        if ($trim === '') { return; }
+        $statement = $this->routeStatement($trim, $source);
+        $statement['depth'] = $depth;
+        $statement['conditions'] = $conditions;
+        $statements[] = $statement;
+        if (str_ends_with(trim($line), '{')) { $depth++; }
+    }
+
+    private function condition(string $expression, array $source): array
+    {
+        $expression = trim($expression);
+        if (preg_match('/^is_method\s*\(\s*["\']([A-Z]+)["\']\s*\)$/i', $expression, $match)) {
+            return ['kind' => 'condition', 'meaning' => 'If request method is ' . strtoupper($match[1]), 'condition_type' => 'method', 'source' => $source, 'confidence' => $source['confidence']];
+        }
+        if (preg_match('/^(?:method|\$rm)\s*==\s*["\']([A-Z]+)["\']$/i', $expression, $match)) {
+            return ['kind' => 'condition', 'meaning' => 'If request method is ' . strtoupper($match[1]), 'condition_type' => 'method', 'source' => $source, 'confidence' => $source['confidence']];
+        }
+        if (preg_match('/^has_totag\s*\(\s*\)$/i', $expression)) {
+            return ['kind' => 'condition', 'meaning' => 'If the request is in-dialog', 'condition_type' => 'in-dialog', 'source' => $source, 'confidence' => $source['confidence']];
+        }
+        if (preg_match('/^(src_ip|dst_ip|\$si)\s*==\s*["\']?([0-9a-f:.]+)["\']?$/i', $expression, $match)) {
+            $side = preg_match('/^(?:src_ip|\$si)$/i', $match[1]) ? 'source' : 'destination';
+            return ['kind' => 'condition', 'meaning' => 'If ' . $side . ' IP equals ' . $match[2], 'condition_type' => $side . '-ip', 'source' => $source, 'confidence' => $source['confidence']];
+        }
+        if (preg_match('/^\$sp\s*==\s*([0-9]{1,5})$/', $expression, $match)) {
+            return ['kind' => 'condition', 'meaning' => 'If source port equals ' . $match[1], 'condition_type' => 'source-port', 'source' => $source, 'confidence' => $source['confidence']];
+        }
+        return ['kind' => 'custom-condition', 'meaning' => 'Custom condition', 'source' => $source, 'confidence' => $source['confidence']];
+    }
+
+    private function routeStatement(string $statement, array $source): array
+    {
+        if (preg_match('/^route\s*(?:\(\s*|\[\s*)([A-Za-z_][A-Za-z0-9_]*)(?:\s*\)|\s*\])$/', $statement, $match)) {
+            return ['kind' => 'route-call', 'target' => $match[1], 'source' => $source, 'confidence' => $source['confidence']];
+        }
+        if (preg_match('/^route\s*(?:\(|\[)/i', $statement)) {
+            return ['kind' => 'unresolved-route-call', 'meaning' => 'Dynamic route call', 'source' => $source, 'confidence' => $source['confidence']];
+        }
+        if (preg_match('/^([A-Za-z_][A-Za-z0-9_]*)\s*\((?:.*)\)$/', $statement, $match)) {
+            $function = strtolower($match[1]);
+            $entry = ['kind' => 'function-call', 'function' => $function, 'source' => $source, 'confidence' => $source['confidence']];
+            if (in_array($function, ['t_on_reply', 't_on_failure', 't_on_branch'], true)
+                && preg_match('/^' . preg_quote($function, '/') . '\s*\(\s*["\']([A-Za-z_][A-Za-z0-9_]*)["\']\s*\)$/i', $statement, $target)) {
+                $entry['target'] = $target[1];
+            }
+            return $entry;
+        }
+        if (in_array(strtolower($statement), ['drop', 'exit', 'return'], true)) {
+            return ['kind' => 'control', 'control' => strtolower($statement), 'source' => $source, 'confidence' => $source['confidence']];
+        }
+        return ['kind' => 'custom', 'meaning' => 'Custom or uninterpreted statement', 'source' => $source, 'confidence' => $source['confidence']];
     }
 
     private function module(string $name, array $source): int { if (isset($this->moduleIndexes[$name])) { return $this->moduleIndexes[$name]; } $i = count($this->report['modules']); $this->moduleIndexes[$name] = $i; $this->report['modules'][] = ['name' => $name, 'source' => $source, 'params' => []]; return $i; }

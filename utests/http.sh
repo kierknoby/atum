@@ -27,6 +27,9 @@ curl -fsS -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/index.php" > "$TEST_DIR
 auth_csrf=$(sed -n 's/.*name="csrf" value="\([^"]*\)".*/\1/p' "$TEST_DIR/page" | head -n1)
 [ -n "$auth_csrf" ]
 curl -fsS -b "$TEST_DIR/cookies" "http://127.0.0.1:$PORT/index.php?display=discovery" > "$TEST_DIR/discovery-page"
+grep -q 'How requests are handled' "$TEST_DIR/discovery-page"
+grep -q 'Call route\[DISPATCH\]' "$TEST_DIR/discovery-page"
+grep -q 'named route had no static reference found' "$TEST_DIR/discovery-page"
 grep -q 'System interpretation' "$TEST_DIR/discovery-page"
 grep -q 'Discovery confidence' "$TEST_DIR/discovery-page"
 grep -q 'SIP over UDP listening on 0.0.0.0:5060' "$TEST_DIR/discovery-page"
